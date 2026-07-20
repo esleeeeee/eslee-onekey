@@ -37,17 +37,23 @@ dotnet publish ... -c Release -r win-x64 --self-contained true
 
 ## 운영 전 남은 수동 작업
 
-- 저장소가 비공개인지 GitHub 설정에서 확인/변경
 - Discord 봇 배포 환경에 사용자 ID/토큰/포트 비밀값 주입
 - OneKey UI에 실제 게임/Discord 실행 파일과 활성 헤드셋 선택
 - Windows 10/11 실장비에서 실제 오디오 전환/복원 시험
 - 장시간 Discord 통화, 네트워크 단절/복구, 재부팅 시험
 - 배포 전 코드 서명과 설치 관리자 정책 결정
-- 기능 브랜치의 Draft PR 생성 및 리뷰
+- Draft PR 리뷰와 승인 후 `main` 병합
+
+## GitHub 인계
+
+- 저장소 공개 범위: 비공개
+- 기준 브랜치: `main`
+- 기능 브랜치: `feat/valorant-automation-mvp`
+- Draft PR: [#1 feat: implement eslee OneKey Windows automation MVP](https://github.com/esleeeeee/eslee-onekey/pull/1)
+- Discord Bot 연동 Draft PR: [eslee-discord-bot #1](https://github.com/esleeeeee/eslee-discord-bot/pull/1)
 
 ## 알려진 제약
 
-- 봇 저장소의 기능 브랜치는 푸시되었지만 현재 자동화 환경의 GitHub 앱 쓰기 권한 제한으로 Draft PR을 만들지 못할 수 있습니다.
-- 새 OneKey 원격 저장소가 공개 상태라면 운영 값 입력 전에 반드시 비공개로 바꿔야 합니다.
+- 연결된 GitHub 앱에는 PR 쓰기 권한이 없어, 로그인된 GitHub 웹 UI로 두 Draft PR을 생성했습니다.
 - 실제 비밀값과 회사 PC 고유 경로는 의도적으로 기록하지 않았습니다.
 
