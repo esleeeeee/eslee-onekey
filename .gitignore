@@ -1,0 +1,15 @@
+bin/
+obj/
+.vs/
+.idea/
+.vscode/
+TestResults/
+artifacts/
+*.user
+*.suo
+*.log
+*.dmp
+settings.json
+session.json
+secrets.dat
+*.local.json
