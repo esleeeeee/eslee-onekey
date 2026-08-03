@@ -55,10 +55,10 @@
                         <TextBlock x:Name="LastErrorStatus" Grid.Column="1" Text="없음" TextWrapping="Wrap" Foreground="#A12828" />
                     </Grid>
                     <WrapPanel Grid.Row="4" VerticalAlignment="Top">
-                        <Button Content="지금 실행" Click="StartNow_Click" Background="#6D5DFB" Foreground="White" />
+                        <Button x:Name="StartNowButton" Content="지금 실행" Click="StartNow_Click" Background="#6D5DFB" Foreground="White" />
                         <Button x:Name="PauseButton" Content="자동화 일시정지" Click="Pause_Click" />
-                        <Button Content="지금 원래 장치로 복원" Click="ManualRestore_Click" />
-                        <Button Content="현재 장치 유지 후 종료" Click="KeepCurrent_Click" />
+                        <Button x:Name="ManualRestoreButton" Content="지금 원래 장치로 복원" Click="ManualRestore_Click" />
+                        <Button x:Name="KeepCurrentButton" Content="현재 장치 유지 후 종료" Click="KeepCurrent_Click" />
                     </WrapPanel>
                 </Grid>
             </TabItem>

@@ -18,7 +18,11 @@ public sealed partial class FileAppLogger : IAppLogger
     public void Warning(string eventName, string message) => Write("WARN", eventName, message);
 
     public void Error(string eventName, Exception exception, string message) =>
-        Write("ERROR", eventName, $"{message} ({exception.GetType().Name}: {exception.Message})");
+        Write(
+            "ERROR",
+            eventName,
+            $"{message} ({exception.GetType().Name}: {exception.Message}, " +
+            $"HResult=0x{exception.HResult:X8}){Environment.NewLine}{exception}");
 
     private void Write(string level, string eventName, string message)
     {

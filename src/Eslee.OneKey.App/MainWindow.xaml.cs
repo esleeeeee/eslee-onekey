@@ -1,6 +1,7 @@
 using System.ComponentModel;
 using System.IO;
 using System.Net.Http;
+using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Interop;
 using Eslee.OneKey.Core;
@@ -31,6 +32,8 @@ public partial class MainWindow : Window
     private bool _paused;
     private bool _allowClose;
     private bool _shuttingDown;
+    private bool _initializationFailed;
+    private bool _initializationErrorShown;
 
     public MainWindow(bool startMinimized)
     {
@@ -67,13 +70,42 @@ public partial class MainWindow : Window
         catch (Exception exception)
         {
             _logger?.Error("app-initialize-failed", exception, "초기화에 실패했습니다.");
-            MessageBox.Show(
-                exception.Message,
-                "OneKey 초기화 오류",
-                MessageBoxButton.OK,
-                MessageBoxImage.Error);
+            EnterInitializationFailedState(exception);
         }
     }
+
+    private void EnterInitializationFailedState(Exception exception)
+    {
+        _initializationFailed = true;
+        var summary = BuildInitializationErrorSummary(exception);
+        EnabledStatus.Text = "초기화 실패";
+        StateStatus.Text = "초기화 실패";
+        LastErrorStatus.Text = $"{summary} 로그: {_paths.LogFile}";
+        StartNowButton.IsEnabled = false;
+        PauseButton.IsEnabled = false;
+        ManualRestoreButton.IsEnabled = false;
+        KeepCurrentButton.IsEnabled = false;
+
+        if (_initializationErrorShown)
+        {
+            return;
+        }
+        _initializationErrorShown = true;
+        MessageBox.Show(
+            $"{summary}\n\n자세한 내용은 로그 파일을 확인하세요.\n{_paths.LogFile}",
+            "OneKey 초기화 오류",
+            MessageBoxButton.OK,
+            MessageBoxImage.Error);
+    }
+
+    private static string BuildInitializationErrorSummary(Exception exception) => exception switch
+    {
+        COMException or InvalidCastException =>
+            "Windows 오디오 장치 정보를 읽지 못해 자동화를 사용할 수 없습니다.",
+        IOException or UnauthorizedAccessException =>
+            "설정 파일을 읽거나 쓰지 못해 자동화를 사용할 수 없습니다.",
+        _ => "초기화 중 오류가 발생해 자동화를 사용할 수 없습니다.",
+    };
 
     private async Task StartRuntimeAsync()
     {
@@ -356,6 +388,10 @@ public partial class MainWindow : Window
 
     private void UpdateStatus()
     {
+        if (_initializationFailed)
+        {
+            return;
+        }
         AutomationNameStatus.Text = _automation.Name;
         EnabledStatus.Text = _automation.Enabled ? "활성" : "비활성";
         var state = _engine?.State ?? AutomationState.Idle;
