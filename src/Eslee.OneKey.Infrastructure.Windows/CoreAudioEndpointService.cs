@@ -3,6 +3,8 @@ using Eslee.OneKey.Core;
 
 namespace Eslee.OneKey.Infrastructure.Windows;
 
+// 아래 COM 선언(GUID, 메서드 순서, 마샬링)은 Windows SDK mmdeviceapi.h/propsys.h와
+// 정확히 일치해야 하며, CoreAudioInteropContractTests가 회귀를 감시한다.
 public sealed class CoreAudioEndpointService : IAudioEndpointService
 {
     private static readonly PropertyKey FriendlyNameKey = new(
@@ -17,9 +19,11 @@ public sealed class CoreAudioEndpointService : IAudioEndpointService
         IMMDeviceCollection? collection = null;
         try
         {
+            // NotPresent(시스템에서 제거된) endpoint는 전환 대상이 될 수 없고
+            // 속성 조회도 ERROR_NO_SUCH_DEVINST로 실패하므로 열거에서 제외한다.
             Marshal.ThrowExceptionForHR(enumerator.EnumAudioEndpoints(
                 DataFlow.Render,
-                DeviceState.All,
+                DeviceState.Active | DeviceState.Disabled | DeviceState.Unplugged,
                 out collection));
             Marshal.ThrowExceptionForHR(collection.GetCount(out var count));
             var endpoints = new List<AudioEndpoint>((int)count);
@@ -109,11 +113,20 @@ public sealed class CoreAudioEndpointService : IAudioEndpointService
 
     private static string? GetFriendlyName(IMMDevice device)
     {
-        Marshal.ThrowExceptionForHR(device.OpenPropertyStore(0, out var store));
+        // 표시 이름은 메타데이터라 장치 상태에 따라 조회가 실패할 수 있다
+        // (예: 연결 해제된 장치의 ERROR_NO_SUCH_DEVINST). 실패하면 null을
+        // 반환해 호출부가 endpoint ID로 대체하게 하고, 열거는 계속한다.
+        if (device.OpenPropertyStore(0, out var store) < 0)
+        {
+            return null;
+        }
         try
         {
             var key = FriendlyNameKey;
-            Marshal.ThrowExceptionForHR(store.GetValue(ref key, out var value));
+            if (store.GetValue(ref key, out var value) < 0)
+            {
+                return null;
+            }
             try
             {
                 return value.GetString();
@@ -160,7 +173,9 @@ public sealed class CoreAudioEndpointService : IAudioEndpointService
         public readonly uint PropertyId = propertyId;
     }
 
-    [StructLayout(LayoutKind.Explicit, Size = 16)]
+    // 네이티브 PROPVARIANT는 x64에서 24바이트(헤더 8 + 유니언 16)라서
+    // 크기를 줄여 선언하면 GetValue/PropVariantClear가 인접 스택을 침범한다.
+    [StructLayout(LayoutKind.Explicit, Size = 24)]
     private struct PropertyVariant
     {
         [FieldOffset(0)]
@@ -208,7 +223,7 @@ public sealed class CoreAudioEndpointService : IAudioEndpointService
     }
 
     [ComImport]
-    [Guid("0BD7A1BE-7A1A-44DB-8397-C0A0C2D32140")]
+    [Guid("0BD7A1BE-7A1A-44DB-8397-CC5392387B5E")]
     [InterfaceType(ComInterfaceType.InterfaceIsIUnknown)]
     private interface IMMDeviceCollection
     {
