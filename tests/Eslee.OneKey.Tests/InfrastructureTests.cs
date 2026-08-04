@@ -62,6 +62,30 @@ public sealed class InfrastructureTests
     }
 
     [Fact]
+    public async Task EmptyTokenSaveIsRejectedAndExistingDpapiTokenIsKept()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "onekey-tests", Guid.NewGuid().ToString("N"));
+        var store = new DpapiSecretStore(new ApplicationPaths(root));
+        const string token = "secure-existing-test-token";
+        try
+        {
+            await store.SaveDiscordApiTokenAsync(token, CancellationToken.None);
+
+            await Assert.ThrowsAsync<ArgumentException>(() =>
+                store.SaveDiscordApiTokenAsync("   ", CancellationToken.None));
+
+            Assert.Equal(token, await store.LoadDiscordApiTokenAsync(CancellationToken.None));
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
     public async Task JsonSettingsNeverContainApiToken()
     {
         var root = Path.Combine(Path.GetTempPath(), "onekey-tests", Guid.NewGuid().ToString("N"));
@@ -73,7 +97,9 @@ public sealed class InfrastructureTests
             var json = await File.ReadAllTextAsync(paths.SettingsFile);
 
             Assert.DoesNotContain("token", json, StringComparison.OrdinalIgnoreCase);
-            Assert.Equal(1, (await store.LoadAsync(CancellationToken.None)).SchemaVersion);
+            Assert.Equal(
+                SettingsMigration.CurrentSchemaVersion,
+                (await store.LoadAsync(CancellationToken.None)).SchemaVersion);
         }
         finally
         {

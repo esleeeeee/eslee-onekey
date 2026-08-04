@@ -52,11 +52,12 @@ public sealed record HotkeyGesture(
 public sealed record AutomationSettings
 {
     public Guid Id { get; init; } = Guid.NewGuid();
-    public string Name { get; init; } = "발로란트 모드";
+    public string Name { get; init; } = "새 자동화";
     public bool Enabled { get; init; } = true;
     public HotkeyGesture Hotkey { get; init; } = new();
-    public string GameProcessName { get; init; } = string.Empty;
-    public string GameExecutablePath { get; init; } = string.Empty;
+    public string WatchProcessName { get; init; } = string.Empty;
+    public string LaunchExecutablePath { get; init; } = string.Empty;
+    public bool UseDiscordIntegration { get; init; }
     public string DiscordProcessName { get; init; } = "Discord";
     public string DiscordExecutablePath { get; init; } = string.Empty;
     public bool BringDiscordToFront { get; init; } = true;
@@ -69,7 +70,7 @@ public sealed record AutomationSettings
 
 public sealed record AppSettings
 {
-    public int SchemaVersion { get; init; } = 1;
+    public int SchemaVersion { get; init; } = 2;
     public bool StartWithWindows { get; init; }
     public List<AutomationSettings> Automations { get; init; } = [new()];
 }

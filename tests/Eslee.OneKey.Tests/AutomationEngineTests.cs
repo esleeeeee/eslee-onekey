@@ -10,7 +10,7 @@ public sealed class AutomationEngineTests
         var harness = Harness.Create(DiscordVoiceState.NotInVoice);
 
         var result = await harness.Engine.StartAsync(AutomationTrigger.Hotkey);
-        await harness.Engine.OnGameExitedAsync();
+        await harness.Engine.OnWatchedProcessExitedAsync();
 
         Assert.True(result.Started);
         Assert.Equal(["game.exe", "discord.exe"], harness.Processes.StartedPaths);
@@ -19,7 +19,7 @@ public sealed class AutomationEngineTests
     }
 
     [Fact]
-    public async Task AlreadyRunningGameIsNotStartedAgain()
+    public async Task AlreadyRunningWatchedProcessIsNotStartedAgain()
     {
         var harness = Harness.Create();
         harness.Processes.Running.Add("game");
@@ -45,12 +45,12 @@ public sealed class AutomationEngineTests
     }
 
     [Fact]
-    public async Task GameExitDuringDiscordVoiceEntersRestorePending()
+    public async Task WatchedProcessExitDuringDiscordVoiceEntersRestorePending()
     {
         var harness = Harness.Create(DiscordVoiceState.InVoice);
         await harness.Engine.StartAsync(AutomationTrigger.Hotkey);
 
-        await harness.Engine.OnGameExitedAsync();
+        await harness.Engine.OnWatchedProcessExitedAsync();
 
         Assert.Equal(AutomationState.RestorePending, harness.Engine.State);
         Assert.Equal("headset", harness.Audio.DefaultId);
@@ -61,7 +61,7 @@ public sealed class AutomationEngineTests
     {
         var harness = Harness.Create(DiscordVoiceState.InVoice, DiscordVoiceState.NotInVoice);
         await harness.Engine.StartAsync(AutomationTrigger.Hotkey);
-        await harness.Engine.OnGameExitedAsync();
+        await harness.Engine.OnWatchedProcessExitedAsync();
 
         await harness.Engine.ContinuePendingRestoreAsync();
 
@@ -74,7 +74,7 @@ public sealed class AutomationEngineTests
     {
         var harness = Harness.Create(DiscordVoiceState.InVoice, DiscordVoiceState.NotInVoice);
         await harness.Engine.StartAsync(AutomationTrigger.Hotkey);
-        await harness.Engine.OnGameExitedAsync();
+        await harness.Engine.OnWatchedProcessExitedAsync();
         harness.Audio.DefaultId = "earbuds";
 
         await harness.Engine.ContinuePendingRestoreAsync();
@@ -90,7 +90,7 @@ public sealed class AutomationEngineTests
         var harness = Harness.Create(DiscordVoiceState.Unavailable, DiscordVoiceState.NotInVoice);
         await harness.Engine.StartAsync(AutomationTrigger.Hotkey);
 
-        await harness.Engine.OnGameExitedAsync();
+        await harness.Engine.OnWatchedProcessExitedAsync();
 
         Assert.Equal(AutomationState.RestorePending, harness.Engine.State);
         Assert.Equal("headset", harness.Audio.DefaultId);
@@ -105,7 +105,7 @@ public sealed class AutomationEngineTests
         var harness = Harness.Create(DiscordVoiceState.Unauthorized);
         await harness.Engine.StartAsync(AutomationTrigger.Hotkey);
 
-        await harness.Engine.OnGameExitedAsync();
+        await harness.Engine.OnWatchedProcessExitedAsync();
 
         Assert.Equal(AutomationState.RestorePending, harness.Engine.State);
         Assert.Contains("인증", harness.Engine.LastError);
@@ -183,19 +183,30 @@ public sealed class AutomationEngineTests
         Assert.Contains("비정상 종료", harness.Engine.LastError);
     }
 
+    [Fact]
+    public async Task AutomationWithoutDiscordIntegrationStartsAndRestoresImmediately()
+    {
+        var harness = Harness.CreateWithoutDiscord();
+
+        var result = await harness.Engine.StartAsync(AutomationTrigger.Hotkey);
+
+        Assert.True(result.Started);
+        Assert.Null(harness.Engine.LastError);
+        Assert.Equal(["game.exe"], harness.Processes.StartedPaths);
+        Assert.Equal(AutomationState.Active, harness.Engine.State);
+
+        await harness.Engine.OnWatchedProcessExitedAsync();
+
+        Assert.Equal(AutomationState.Completed, harness.Engine.State);
+        Assert.Equal("speaker", harness.Audio.DefaultId);
+        Assert.Equal(0, harness.Voice.Calls);
+    }
+
     private sealed class Harness
     {
-        private Harness(params DiscordVoiceState[] states)
+        private Harness(AutomationSettings settings, DiscordVoiceState[] states)
         {
-            Settings = new AutomationSettings
-            {
-                GameProcessName = "game",
-                GameExecutablePath = "game.exe",
-                DiscordProcessName = "discord",
-                DiscordExecutablePath = "discord.exe",
-                TargetAudioEndpointId = "headset",
-                DiscordApiBaseUrl = "https://example.invalid",
-            };
+            Settings = settings;
             Audio = new FakeAudioService();
             Processes = new FakeProcessService();
             Voice = new FakeVoiceClient(states);
@@ -219,7 +230,30 @@ public sealed class AutomationEngineTests
         public FakeLogger Logger { get; }
         public AutomationEngine Engine { get; }
 
-        public static Harness Create(params DiscordVoiceState[] states) => new(states);
+        public static Harness Create(params DiscordVoiceState[] states) => new(
+            new AutomationSettings
+            {
+                WatchProcessName = "game",
+                LaunchExecutablePath = "game.exe",
+                UseDiscordIntegration = true,
+                DiscordProcessName = "discord",
+                DiscordExecutablePath = "discord.exe",
+                TargetAudioEndpointId = "headset",
+                DiscordApiBaseUrl = "https://example.invalid",
+            },
+            states);
+
+        public static Harness CreateWithoutDiscord() => new(
+            new AutomationSettings
+            {
+                WatchProcessName = "game",
+                LaunchExecutablePath = "game.exe",
+                UseDiscordIntegration = false,
+                DiscordExecutablePath = string.Empty,
+                DiscordApiBaseUrl = string.Empty,
+                TargetAudioEndpointId = "headset",
+            },
+            states: []);
     }
 }
 
@@ -288,8 +322,13 @@ internal sealed class FakeVoiceClient : IDiscordVoiceStatusClient
                 state == DiscordVoiceState.Unauthorized ? "Discord API 인증 오류" : null)));
     }
 
-    public Task<DiscordVoiceCheck> CheckAsync(CancellationToken cancellationToken) =>
-        Task.FromResult(_states.Count > 1 ? _states.Dequeue() : _states.Peek());
+    public int Calls { get; private set; }
+
+    public Task<DiscordVoiceCheck> CheckAsync(CancellationToken cancellationToken)
+    {
+        Calls++;
+        return Task.FromResult(_states.Count > 1 ? _states.Dequeue() : _states.Peek());
+    }
 }
 
 internal sealed class FakeSessionStore : ISessionStore

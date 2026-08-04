@@ -85,6 +85,8 @@ public partial class MainWindow : Window
         PauseButton.IsEnabled = false;
         ManualRestoreButton.IsEnabled = false;
         KeepCurrentButton.IsEnabled = false;
+        // 설정을 읽지 못한 상태에서 저장하면 빈 컨트롤 값이 원본 파일을 덮어쓴다.
+        SaveSettingsButton.IsEnabled = false;
 
         if (_initializationErrorShown)
         {
@@ -102,7 +104,7 @@ public partial class MainWindow : Window
     {
         COMException or InvalidCastException =>
             "Windows 오디오 장치 정보를 읽지 못해 자동화를 사용할 수 없습니다.",
-        IOException or UnauthorizedAccessException =>
+        IOException or UnauthorizedAccessException or System.Text.Json.JsonException =>
             "설정 파일을 읽거나 쓰지 못해 자동화를 사용할 수 없습니다.",
         _ => "초기화 중 오류가 발생해 자동화를 사용할 수 없습니다.",
     };
@@ -162,8 +164,9 @@ public partial class MainWindow : Window
         ShiftCheck.IsChecked = _automation.Hotkey.Shift;
         WinCheck.IsChecked = _automation.Hotkey.Windows;
         HotkeyText.Text = _automation.Hotkey.Key;
-        GamePathText.Text = _automation.GameExecutablePath;
-        GameProcessText.Text = _automation.GameProcessName;
+        LaunchPathText.Text = _automation.LaunchExecutablePath;
+        WatchProcessText.Text = _automation.WatchProcessName;
+        UseDiscordCheck.IsChecked = _automation.UseDiscordIntegration;
         DiscordPathText.Text = _automation.DiscordExecutablePath;
         DiscordProcessText.Text = _automation.DiscordProcessName;
         ApiUrlText.Text = _automation.DiscordApiBaseUrl;
@@ -191,8 +194,9 @@ public partial class MainWindow : Window
             ShiftCheck.IsChecked == true,
             WinCheck.IsChecked == true,
             HotkeyText.Text.Trim()),
-        GameExecutablePath = GamePathText.Text.Trim(),
-        GameProcessName = WindowsProcessService.NormalizeProcessName(GameProcessText.Text),
+        LaunchExecutablePath = LaunchPathText.Text.Trim(),
+        WatchProcessName = WindowsProcessService.NormalizeProcessName(WatchProcessText.Text),
+        UseDiscordIntegration = UseDiscordCheck.IsChecked == true,
         DiscordExecutablePath = DiscordPathText.Text.Trim(),
         DiscordProcessName = WindowsProcessService.NormalizeProcessName(DiscordProcessText.Text),
         BringDiscordToFront = true,
@@ -205,7 +209,7 @@ public partial class MainWindow : Window
 
     private async void SaveSettings_Click(object sender, RoutedEventArgs e)
     {
-        if (_settingsStore is null || _secretStore is null)
+        if (_initializationFailed || _settingsStore is null || _secretStore is null)
         {
             return;
         }
@@ -226,7 +230,7 @@ public partial class MainWindow : Window
             _automation = candidate;
             _appSettings = new AppSettings
             {
-                SchemaVersion = 1,
+                SchemaVersion = SettingsMigration.CurrentSchemaVersion,
                 StartWithWindows = StartupCheck.IsChecked == true,
                 Automations = [candidate],
             };
@@ -263,19 +267,19 @@ public partial class MainWindow : Window
         {
             return;
         }
-        if (string.IsNullOrWhiteSpace(settings.GameProcessName))
+        if (string.IsNullOrWhiteSpace(settings.WatchProcessName))
         {
-            throw new InvalidOperationException("발로란트 프로세스명을 입력하세요.");
+            throw new InvalidOperationException("종료 감시 프로세스명을 입력하세요.");
         }
-        if (string.IsNullOrWhiteSpace(settings.GameExecutablePath))
+        if (string.IsNullOrWhiteSpace(settings.LaunchExecutablePath))
         {
-            throw new InvalidOperationException("발로란트 실행 파일을 선택하세요.");
+            throw new InvalidOperationException("실행 파일을 선택하세요.");
         }
         if (string.IsNullOrWhiteSpace(settings.TargetAudioEndpointId))
         {
             throw new InvalidOperationException("전환할 헤드셋을 선택하세요.");
         }
-        if (settings.DeferRestoreWhileDiscordInVoice)
+        if (settings.UseDiscordIntegration && settings.DeferRestoreWhileDiscordInVoice)
         {
             if (!DiscordVoiceStatusClient.TryBuildEndpoint(settings.DiscordApiBaseUrl, out _))
             {
@@ -331,8 +335,8 @@ public partial class MainWindow : Window
         }
     }
 
-    private void BrowseGame_Click(object sender, RoutedEventArgs e) =>
-        BrowseExecutable(GamePathText, GameProcessText);
+    private void BrowseLaunch_Click(object sender, RoutedEventArgs e) =>
+        BrowseExecutable(LaunchPathText, WatchProcessText);
 
     private void BrowseDiscord_Click(object sender, RoutedEventArgs e) =>
         BrowseExecutable(DiscordPathText, DiscordProcessText);
@@ -349,7 +353,12 @@ public partial class MainWindow : Window
         if (dialog.ShowDialog() == true)
         {
             pathText.Text = dialog.FileName;
-            processText.Text = Path.GetFileNameWithoutExtension(dialog.FileName);
+            // 실행 파일과 감시 프로세스는 서로 다를 수 있다(예: 런처 실행 +
+            // 게임 프로세스 감시). 사용자가 입력해 둔 값을 덮어쓰지 않는다.
+            if (string.IsNullOrWhiteSpace(processText.Text))
+            {
+                processText.Text = Path.GetFileNameWithoutExtension(dialog.FileName);
+            }
         }
     }
 
@@ -395,9 +404,7 @@ public partial class MainWindow : Window
         AutomationNameStatus.Text = _automation.Name;
         EnabledStatus.Text = _automation.Enabled ? "활성" : "비활성";
         var state = _engine?.State ?? AutomationState.Idle;
-        StateStatus.Text = state == AutomationState.RestorePending
-            ? "Discord 음성채팅 종료 대기 중 (RestorePending)"
-            : state.ToString();
+        StateStatus.Text = AutomationStatusText.ForState(state, WaitsForDiscordVoice);
         LastRunStatus.Text = _engine?.LastRunAt?.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss") ?? "없음";
         LastErrorStatus.Text = _engine?.LastError ?? _coordinator?.LastError ?? "없음";
         _tray?.SetRestorePending(state == AutomationState.RestorePending);
@@ -412,15 +419,18 @@ public partial class MainWindow : Window
         UpdateStatus();
     }
 
+    private bool WaitsForDiscordVoice =>
+        _automation.UseDiscordIntegration && _automation.DeferRestoreWhileDiscordInVoice;
+
     private void MainWindow_Closing(object? sender, CancelEventArgs e)
     {
         if (_allowClose)
         {
             return;
         }
+        // X 버튼은 알림 없이 조용히 트레이로 숨긴다. 완전 종료는 트레이 메뉴에서 한다.
         e.Cancel = true;
         Hide();
-        _tray?.ShowBalloon("eslee OneKey", "OneKey는 트레이에서 계속 실행됩니다.");
     }
 
     public void OpenFromTray()
@@ -437,8 +447,8 @@ public partial class MainWindow : Window
 
     public void ShowCurrentStatus() => Dispatcher.Invoke(() =>
         MessageBox.Show(
-            $"상태: {_engine?.State ?? AutomationState.Idle}\n" +
-            $"RestorePending: {_engine?.RestorePending ?? false}\n" +
+            $"상태: {AutomationStatusText.ForState(_engine?.State ?? AutomationState.Idle, WaitsForDiscordVoice)}\n" +
+            $"복원 대기: {_engine?.RestorePending ?? false}\n" +
             $"오류: {_engine?.LastError ?? _coordinator?.LastError ?? "없음"}",
             "eslee OneKey 현재 상태"));
 

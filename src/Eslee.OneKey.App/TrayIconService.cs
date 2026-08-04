@@ -31,19 +31,26 @@ public sealed class TrayIconService : IDisposable
         _icon.DoubleClick += (_, _) => window.OpenFromTray();
     }
 
+    private bool _paused;
+    private bool _restorePending;
+
     public void SetPaused(bool paused)
     {
+        _paused = paused;
         _pauseItem.Checked = paused;
-        _icon.Text = paused ? "eslee OneKey (일시정지)" : "eslee OneKey";
+        UpdateText();
     }
 
     public void SetRestorePending(bool pending)
     {
-        if (pending)
-        {
-            _icon.Text = "eslee OneKey (Discord 통화 종료 대기)";
-        }
+        _restorePending = pending;
+        UpdateText();
     }
+
+    private void UpdateText() => _icon.Text =
+        _paused ? "eslee OneKey (일시정지)"
+        : _restorePending ? "eslee OneKey (복원 대기)"
+        : "eslee OneKey";
 
     public void ShowBalloon(string title, string message)
     {

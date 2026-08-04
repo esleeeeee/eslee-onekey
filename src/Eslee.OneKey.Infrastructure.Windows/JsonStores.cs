@@ -1,4 +1,5 @@
 using System.Text.Json;
+using System.Text.Json.Nodes;
 using Eslee.OneKey.Core;
 
 namespace Eslee.OneKey.Infrastructure.Windows;
@@ -17,9 +18,9 @@ public sealed class JsonSettingsStore(ApplicationPaths paths) : ISettingsStore
             return new AppSettings();
         }
 
-        await using var stream = File.OpenRead(paths.SettingsFile);
-        return await JsonSerializer.DeserializeAsync<AppSettings>(stream, Options, cancellationToken)
-            ?? new AppSettings();
+        var json = await File.ReadAllTextAsync(paths.SettingsFile, cancellationToken);
+        var migrated = SettingsMigration.Migrate(JsonNode.Parse(json));
+        return migrated.Deserialize<AppSettings>(Options) ?? new AppSettings();
     }
 
     public Task SaveAsync(AppSettings settings, CancellationToken cancellationToken) =>
