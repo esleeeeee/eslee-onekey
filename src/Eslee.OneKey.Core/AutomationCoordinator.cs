@@ -37,10 +37,10 @@ public sealed class AutomationCoordinator : IAsyncDisposable
             LastError = registration.Error ?? "전역 단축키 등록에 실패했습니다.";
         }
 
-        if (!string.IsNullOrWhiteSpace(_settings.GameProcessName))
+        if (!string.IsNullOrWhiteSpace(_settings.WatchProcessName))
         {
             await _processMonitor.StartAsync(
-                _settings.GameProcessName,
+                _settings.WatchProcessName,
                 _settings.ProcessPollInterval,
                 cancellationToken);
         }
@@ -73,7 +73,7 @@ public sealed class AutomationCoordinator : IAsyncDisposable
             return;
         }
 
-        await _engine.OnGameExitedAsync(LifetimeToken);
+        await _engine.OnWatchedProcessExitedAsync(LifetimeToken);
         StartRestorePollingIfNeeded();
     }
 

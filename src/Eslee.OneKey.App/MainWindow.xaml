@@ -11,7 +11,7 @@
 
         <StackPanel Margin="4,0,4,14">
             <TextBlock Text="eslee OneKey" FontSize="28" FontWeight="SemiBold" Foreground="#26233B" />
-            <TextBlock Text="발로란트 환경 전환과 Discord 통화 종료 후 안전 복원" Foreground="#69677A" />
+            <TextBlock Text="단축키로 앱 실행, 오디오 전환, 종료 후 안전 복원" Foreground="#69677A" />
         </StackPanel>
 
         <TabControl Grid.Row="1" Background="White" BorderBrush="#DDDDE8">
@@ -26,7 +26,7 @@
                     </Grid.RowDefinitions>
                     <Border Background="#F0EEFF" CornerRadius="10" Padding="18" Margin="0,0,0,18">
                         <StackPanel>
-                            <TextBlock x:Name="AutomationNameStatus" Text="발로란트 모드" FontSize="20" FontWeight="SemiBold" />
+                            <TextBlock x:Name="AutomationNameStatus" Text="자동화" FontSize="20" FontWeight="SemiBold" />
                             <TextBlock x:Name="EnabledStatus" Text="설정을 불러오는 중" Margin="0,6,0,0" />
                         </StackPanel>
                     </Border>
@@ -36,7 +36,7 @@
                             <ColumnDefinition Width="*" />
                         </Grid.ColumnDefinitions>
                         <TextBlock Text="자동화 상태" FontWeight="SemiBold" />
-                        <TextBlock x:Name="StateStatus" Grid.Column="1" Text="Idle" />
+                        <TextBlock x:Name="StateStatus" Grid.Column="1" Text="대기 중" />
                     </Grid>
                     <Grid Grid.Row="2" Margin="0,0,0,12">
                         <Grid.ColumnDefinitions>
@@ -86,6 +86,8 @@
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
                         </Grid.RowDefinitions>
 
                         <TextBlock Text="자동화 이름" VerticalAlignment="Center" />
@@ -103,46 +105,60 @@
                             <TextBox x:Name="HotkeyText" Width="65" MaxLength="3" />
                         </StackPanel>
 
-                        <TextBlock Grid.Row="3" Text="발로란트 실행 파일" VerticalAlignment="Center" />
-                        <TextBox x:Name="GamePathText" Grid.Row="3" Grid.Column="1" />
-                        <Button Grid.Row="3" Grid.Column="2" Content="찾기" Click="BrowseGame_Click" />
+                        <TextBlock Grid.Row="3" Text="실행 파일" VerticalAlignment="Center" />
+                        <TextBox x:Name="LaunchPathText" Grid.Row="3" Grid.Column="1" />
+                        <Button Grid.Row="3" Grid.Column="2" Content="찾기" Click="BrowseLaunch_Click" />
 
-                        <TextBlock Grid.Row="4" Text="발로란트 프로세스명" VerticalAlignment="Center" />
-                        <TextBox x:Name="GameProcessText" Grid.Row="4" Grid.Column="1" Grid.ColumnSpan="2" />
+                        <TextBlock Grid.Row="4" Text="종료 감시 프로세스명" VerticalAlignment="Center" />
+                        <TextBox x:Name="WatchProcessText" Grid.Row="4" Grid.Column="1" Grid.ColumnSpan="2" />
 
-                        <TextBlock Grid.Row="5" Text="Discord 실행 파일" VerticalAlignment="Center" />
-                        <TextBox x:Name="DiscordPathText" Grid.Row="5" Grid.Column="1" />
-                        <Button Grid.Row="5" Grid.Column="2" Content="찾기" Click="BrowseDiscord_Click" />
-
-                        <TextBlock Grid.Row="6" Text="Discord 프로세스명" VerticalAlignment="Center" />
-                        <TextBox x:Name="DiscordProcessText" Grid.Row="6" Grid.Column="1" Grid.ColumnSpan="2" />
-
-                        <TextBlock Grid.Row="7" Text="전환 대상 헤드셋" VerticalAlignment="Center" />
-                        <ComboBox x:Name="AudioEndpointCombo" Grid.Row="7" Grid.Column="1"
+                        <TextBlock Grid.Row="5" Text="전환 대상 헤드셋" VerticalAlignment="Center" />
+                        <ComboBox x:Name="AudioEndpointCombo" Grid.Row="5" Grid.Column="1"
                                   DisplayMemberPath="Name" SelectedValuePath="Id" />
-                        <Button Grid.Row="7" Grid.Column="2" Content="새로고침" Click="RefreshAudio_Click" />
+                        <Button Grid.Row="5" Grid.Column="2" Content="새로고침" Click="RefreshAudio_Click" />
 
-                        <TextBlock Grid.Row="8" Text="Discord API URL" VerticalAlignment="Center" />
-                        <TextBox x:Name="ApiUrlText" Grid.Row="8" Grid.Column="1" Grid.ColumnSpan="2" />
+                        <TextBlock Grid.Row="6" Grid.ColumnSpan="3" Text="Discord 통화 연동 (선택)"
+                                   FontWeight="SemiBold" Margin="0,18,0,4" />
 
-                        <TextBlock Grid.Row="9" Text="Discord API Token" VerticalAlignment="Center" />
-                        <PasswordBox x:Name="ApiTokenPassword" Grid.Row="9" Grid.Column="1" Margin="4" Padding="7" />
-                        <Button Grid.Row="9" Grid.Column="2" Content="연결 확인" Click="TestApi_Click" />
+                        <TextBlock Grid.Row="7" Text="사용" VerticalAlignment="Center" />
+                        <CheckBox x:Name="UseDiscordCheck" Grid.Row="7" Grid.Column="1" Grid.ColumnSpan="2"
+                                  Content="Discord 통화 연동 사용" Margin="8" />
 
-                        <TextBlock Grid.Row="10" Grid.Column="1" Grid.ColumnSpan="2"
+                        <TextBlock Grid.Row="8" Text="Discord 실행 파일" VerticalAlignment="Center" />
+                        <TextBox x:Name="DiscordPathText" Grid.Row="8" Grid.Column="1"
+                                 IsEnabled="{Binding IsChecked, ElementName=UseDiscordCheck}" />
+                        <Button Grid.Row="8" Grid.Column="2" Content="찾기" Click="BrowseDiscord_Click"
+                                IsEnabled="{Binding IsChecked, ElementName=UseDiscordCheck}" />
+
+                        <TextBlock Grid.Row="9" Text="Discord 프로세스명" VerticalAlignment="Center" />
+                        <TextBox x:Name="DiscordProcessText" Grid.Row="9" Grid.Column="1" Grid.ColumnSpan="2"
+                                 IsEnabled="{Binding IsChecked, ElementName=UseDiscordCheck}" />
+
+                        <TextBlock Grid.Row="10" Text="Discord API URL" VerticalAlignment="Center" />
+                        <TextBox x:Name="ApiUrlText" Grid.Row="10" Grid.Column="1" Grid.ColumnSpan="2"
+                                 IsEnabled="{Binding IsChecked, ElementName=UseDiscordCheck}" />
+
+                        <TextBlock Grid.Row="11" Text="Discord API Token" VerticalAlignment="Center" />
+                        <PasswordBox x:Name="ApiTokenPassword" Grid.Row="11" Grid.Column="1" Margin="4" Padding="7"
+                                     IsEnabled="{Binding IsChecked, ElementName=UseDiscordCheck}" />
+                        <Button Grid.Row="11" Grid.Column="2" Content="연결 확인" Click="TestApi_Click"
+                                IsEnabled="{Binding IsChecked, ElementName=UseDiscordCheck}" />
+
+                        <TextBlock Grid.Row="12" Grid.Column="1" Grid.ColumnSpan="2"
                                    Text="Token을 비워 두면 기존 DPAPI 보관값을 유지합니다. 일반 settings.json에는 저장되지 않습니다."
                                    Foreground="#69677A" TextWrapping="Wrap" Margin="6,0,0,8" />
 
-                        <TextBlock Grid.Row="11" Text="복원 정책" VerticalAlignment="Center" />
-                        <CheckBox x:Name="DeferRestoreCheck" Grid.Row="11" Grid.Column="1" Grid.ColumnSpan="2"
-                                  Content="Discord 통화 중이면 복원 보류" Margin="8" />
+                        <TextBlock Grid.Row="13" Text="복원 정책" VerticalAlignment="Center" />
+                        <CheckBox x:Name="DeferRestoreCheck" Grid.Row="13" Grid.Column="1" Grid.ColumnSpan="2"
+                                  Content="Discord 통화 중이면 복원 보류" Margin="8"
+                                  IsEnabled="{Binding IsChecked, ElementName=UseDiscordCheck}" />
 
-                        <TextBlock Grid.Row="12" Text="Windows 시작" VerticalAlignment="Center" />
-                        <CheckBox x:Name="StartupCheck" Grid.Row="12" Grid.Column="1" Grid.ColumnSpan="2"
+                        <TextBlock Grid.Row="14" Text="Windows 시작" VerticalAlignment="Center" />
+                        <CheckBox x:Name="StartupCheck" Grid.Row="14" Grid.Column="1" Grid.ColumnSpan="2"
                                   Content="로그인 시 자동 실행" Margin="8" />
 
-                        <WrapPanel Grid.Row="13" Grid.Column="1" Grid.ColumnSpan="2" Margin="0,14,0,0">
-                            <Button Content="설정 저장 및 적용" Click="SaveSettings_Click" Background="#6D5DFB" Foreground="White" />
+                        <WrapPanel Grid.Row="15" Grid.Column="1" Grid.ColumnSpan="2" Margin="0,14,0,0">
+                            <Button x:Name="SaveSettingsButton" Content="설정 저장 및 적용" Click="SaveSettings_Click" Background="#6D5DFB" Foreground="White" />
                         </WrapPanel>
                     </Grid>
                 </ScrollViewer>

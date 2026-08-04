@@ -89,7 +89,7 @@ public sealed class AutomationEngine
             _logger.Info("audio-switched", "지정한 헤드셋으로 기본 출력을 전환했습니다.");
             await SaveSessionAsync(cancellationToken);
 
-            await EnsureGameRunningAsync(trigger, cancellationToken);
+            await EnsureLaunchTargetRunningAsync(trigger, cancellationToken);
             await EnsureDiscordRunningAsync(cancellationToken);
 
             SetState(AutomationState.Active);
@@ -110,7 +110,7 @@ public sealed class AutomationEngine
         }
     }
 
-    public async Task OnGameExitedAsync(CancellationToken cancellationToken = default)
+    public async Task OnWatchedProcessExitedAsync(CancellationToken cancellationToken = default)
     {
         await _gate.WaitAsync(cancellationToken);
         try
@@ -120,7 +120,7 @@ public sealed class AutomationEngine
                 return;
             }
 
-            _logger.Info("game-exited", "대상 프로세스 종료를 감지했습니다.");
+            _logger.Info("watched-process-exited", "대상 프로세스 종료를 감지했습니다.");
             await EvaluateRestoreAsync(cancellationToken);
         }
         finally
@@ -214,11 +214,11 @@ public sealed class AutomationEngine
         _logger.Warning("stale-session", LastError);
     }
 
-    private async Task EnsureGameRunningAsync(
+    private async Task EnsureLaunchTargetRunningAsync(
         AutomationTrigger trigger,
         CancellationToken cancellationToken)
     {
-        if (await _processes.IsRunningAsync(_settings.GameProcessName, cancellationToken))
+        if (await _processes.IsRunningAsync(_settings.WatchProcessName, cancellationToken))
         {
             return;
         }
@@ -228,17 +228,22 @@ public sealed class AutomationEngine
             return;
         }
 
-        if (string.IsNullOrWhiteSpace(_settings.GameExecutablePath))
+        if (string.IsNullOrWhiteSpace(_settings.LaunchExecutablePath))
         {
-            throw new InvalidOperationException("게임 실행 파일을 설정해야 합니다.");
+            throw new InvalidOperationException("실행 파일을 설정해야 합니다.");
         }
 
-        await _processes.StartAsync(_settings.GameExecutablePath, cancellationToken);
-        _logger.Info("game-started", "설정된 게임 실행 파일을 시작했습니다.");
+        await _processes.StartAsync(_settings.LaunchExecutablePath, cancellationToken);
+        _logger.Info("launch-started", "설정된 실행 파일을 시작했습니다.");
     }
 
     private async Task EnsureDiscordRunningAsync(CancellationToken cancellationToken)
     {
+        if (!_settings.UseDiscordIntegration)
+        {
+            return;
+        }
+
         if (await _processes.IsRunningAsync(_settings.DiscordProcessName, cancellationToken))
         {
             if (_settings.BringDiscordToFront)
@@ -269,7 +274,7 @@ public sealed class AutomationEngine
 
     private async Task EvaluateRestoreAsync(CancellationToken cancellationToken)
     {
-        if (!_settings.DeferRestoreWhileDiscordInVoice)
+        if (!_settings.UseDiscordIntegration || !_settings.DeferRestoreWhileDiscordInVoice)
         {
             await RestoreIfSafeAsync(cancellationToken);
             return;
