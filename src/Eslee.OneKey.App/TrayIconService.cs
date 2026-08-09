@@ -34,6 +34,15 @@ public sealed class TrayIconService : IDisposable
     private bool _paused;
     private bool _restorePending;
 
+    /// <summary>파이프 메뉴의 체크 표시에 쓰는 현재 일시정지 상태입니다.</summary>
+    public bool IsPaused => _paused;
+
+    /// <summary>
+    /// Tray Folder Hosted 모드 전환용 아이콘 표시 제어입니다. 자동화 동작은 그대로
+    /// 유지되며 아이콘만 숨겨집니다. UI 스레드에서 호출해야 합니다.
+    /// </summary>
+    public void SetTrayIconVisible(bool visible) => _icon.Visible = visible;
+
     public void SetPaused(bool paused)
     {
         _paused = paused;
@@ -54,6 +63,12 @@ public sealed class TrayIconService : IDisposable
 
     public void ShowBalloon(string title, string message)
     {
+        if (!_icon.Visible)
+        {
+            // Hosted 모드에서는 아이콘이 없어 풍선을 표시할 수 없습니다.
+            return;
+        }
+
         _icon.BalloonTipTitle = title;
         _icon.BalloonTipText = message;
         _icon.ShowBalloonTip(2500);
