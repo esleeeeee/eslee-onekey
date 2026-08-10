@@ -29,6 +29,7 @@ public partial class MainWindow : Window
     private AutomationCoordinator? _coordinator;
     private HttpClient? _httpClient;
     private TrayIconService? _tray;
+    private TrayFolderLink? _trayFolderLink;
     private bool _paused;
     private bool _allowClose;
     private bool _shuttingDown;
@@ -54,6 +55,22 @@ public partial class MainWindow : Window
             _logger = new FileAppLogger(_paths);
             _logger.Info("app-start", "eslee OneKey를 시작했습니다.");
             _tray = new TrayIconService(this);
+
+            // Tray Folder 연동: Hosted 모드에서는 아이콘만 숨기고 자동화는 그대로
+            // 유지됩니다. 연결이 끊어지면 링크가 아이콘을 자동 복구합니다.
+            _trayFolderLink = new TrayFolderLink(
+                TrayFolderLink.BuildDefaultPipeName(),
+                "eslee.onekey",
+                "eslee OneKey",
+                Environment.ProcessId,
+                visible => Dispatcher.InvokeAsync(() => _tray?.SetTrayIconVisible(visible)).Task,
+                () => Dispatcher.InvokeAsync(OpenFromTray).Task,
+                () => Dispatcher.InvokeAsync(
+                    () => OneKeyTrayFolderMenu.Build(_tray?.IsPaused ?? _paused)).Task,
+                actionId => Dispatcher.InvokeAsync(() => TryStartTrayFolderMenuAction(actionId)).Task,
+                (eventName, message) => _logger?.Info(eventName, message),
+                (eventName, exception) => _logger?.Error(eventName, exception, exception.Message));
+            _trayFolderLink.Start();
 
             _appSettings = await _settingsStore.LoadAsync(CancellationToken.None);
             _automation = _appSettings.Automations.FirstOrDefault() ?? new AutomationSettings();
@@ -445,6 +462,32 @@ public partial class MainWindow : Window
 
     public void TogglePausedFromTray() => Dispatcher.Invoke(TogglePaused);
 
+    /// <summary>
+    /// Tray Folder 메뉴에서 클릭된 항목을 실행합니다. 대화 상자를 띄우는 항목이
+    /// 파이프 응답을 막지 않도록 실행은 UI 큐에 넘기고, 알려진 항목인지 여부만
+    /// 즉시 돌려줍니다.
+    /// </summary>
+    private bool TryStartTrayFolderMenuAction(string actionId)
+    {
+        switch (actionId)
+        {
+            case OneKeyTrayFolderMenu.OpenAppActionId:
+                _ = Dispatcher.InvokeAsync(OpenFromTray);
+                return true;
+            case OneKeyTrayFolderMenu.TogglePauseActionId:
+                _ = Dispatcher.InvokeAsync(TogglePaused);
+                return true;
+            case OneKeyTrayFolderMenu.ShowStatusActionId:
+                _ = Dispatcher.InvokeAsync(ShowCurrentStatus);
+                return true;
+            case OneKeyTrayFolderMenu.ExitActionId:
+                _ = Dispatcher.InvokeAsync(ExitApplication);
+                return true;
+            default:
+                return false;
+        }
+    }
+
     public void ShowCurrentStatus() => Dispatcher.Invoke(() =>
         MessageBox.Show(
             $"상태: {AutomationStatusText.ForState(_engine?.State ?? AutomationState.Idle, WaitsForDiscordVoice)}\n" +
@@ -474,6 +517,8 @@ public partial class MainWindow : Window
         _httpClient?.Dispose();
         _httpClient = null;
         _logger?.Info("app-stop", "eslee OneKey를 종료했습니다.");
+        _trayFolderLink?.Dispose();
+        _trayFolderLink = null;
         _tray?.Dispose();
         _tray = null;
     }
