@@ -1,9 +1,11 @@
 using System.ComponentModel;
+using System.Diagnostics;
 using System.IO;
 using System.Net.Http;
 using System.Runtime.InteropServices;
 using System.Windows;
 using System.Windows.Interop;
+using System.Windows.Threading;
 using Eslee.OneKey.Core;
 using Eslee.OneKey.Infrastructure.Windows;
 using Microsoft.Win32;
@@ -30,16 +32,26 @@ public partial class MainWindow : Window
     private HttpClient? _httpClient;
     private TrayIconService? _tray;
     private TrayFolderLink? _trayFolderLink;
+    private HttpClient? _updateHttpClient;
+    private UpdateCheckService? _updateChecker;
+    private DispatcherTimer? _updateTimer;
+    private string? _latestReleaseUrl;
     private bool _paused;
     private bool _allowClose;
     private bool _shuttingDown;
     private bool _initializationFailed;
     private bool _initializationErrorShown;
 
+    private static readonly TimeSpan UpdateCheckInterval = TimeSpan.FromHours(24);
+
+    private static Version CurrentVersion =>
+        typeof(MainWindow).Assembly.GetName().Version ?? new Version(0, 0, 0);
+
     public MainWindow(bool startMinimized)
     {
         _startMinimized = startMinimized;
         InitializeComponent();
+        VersionText.Text = $"eslee OneKey {UpdateCheckService.FormatVersion(CurrentVersion)}";
         Loaded += MainWindow_Loaded;
         Closing += MainWindow_Closing;
     }
@@ -88,6 +100,78 @@ public partial class MainWindow : Window
         {
             _logger?.Error("app-initialize-failed", exception, "초기화에 실패했습니다.");
             EnterInitializationFailedState(exception);
+        }
+
+        // 업데이트 확인은 자동화 초기화 성공 여부와 무관하게 동작하며,
+        // 실패해도 자동화에 영향을 주지 않는다.
+        StartUpdateChecks();
+    }
+
+    private void StartUpdateChecks()
+    {
+        _updateHttpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+        _updateChecker = new UpdateCheckService(_updateHttpClient);
+        _updateTimer = new DispatcherTimer { Interval = UpdateCheckInterval };
+        _updateTimer.Tick += (_, _) => _ = RunUpdateCheckAsync();
+        _updateTimer.Start();
+        _ = RunUpdateCheckAsync();
+    }
+
+    private async Task RunUpdateCheckAsync()
+    {
+        if (_updateChecker is null)
+        {
+            return;
+        }
+
+        CheckUpdateButton.IsEnabled = false;
+        UpdateStatusText.Text = "업데이트를 확인하는 중...";
+        try
+        {
+            var result = await _updateChecker.CheckAsync(CurrentVersion, CancellationToken.None);
+            _latestReleaseUrl = result.ReleaseUrl;
+            UpdateStatusText.Text = result.Status switch
+            {
+                UpdateCheckStatus.UpToDate =>
+                    $"최신 버전입니다. (현재 {UpdateCheckService.FormatVersion(CurrentVersion)})",
+                UpdateCheckStatus.UpdateAvailable =>
+                    $"새 버전 {result.LatestVersion}을(를) 사용할 수 있습니다. " +
+                    "Release 페이지에서 내려받으세요.",
+                UpdateCheckStatus.NoReleaseFound =>
+                    "확인 가능한 정식 릴리스가 없습니다. 저장소가 비공개이거나 아직 릴리스가 게시되지 않았습니다.",
+                _ => "업데이트 확인에 실패했습니다. 잠시 후 다시 시도하세요.",
+            };
+        }
+        catch (Exception exception)
+        {
+            // 어떤 예외도 자동화 동작에 영향을 주지 않도록 여기서 끝낸다.
+            _logger?.Error("update-check-failed", exception, "업데이트 확인 중 오류가 발생했습니다.");
+            UpdateStatusText.Text = "업데이트 확인에 실패했습니다. 잠시 후 다시 시도하세요.";
+        }
+        finally
+        {
+            CheckUpdateButton.IsEnabled = true;
+        }
+    }
+
+    private async void CheckUpdate_Click(object sender, RoutedEventArgs e) =>
+        await RunUpdateCheckAsync();
+
+    private void OpenReleasePage_Click(object sender, RoutedEventArgs e)
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo(_latestReleaseUrl ?? UpdateCheckService.ReleasesPageUrl)
+            {
+                UseShellExecute = true,
+            });
+        }
+        catch (Exception exception)
+        {
+            _logger?.Error("open-release-page-failed", exception, "Release 페이지를 여는 데 실패했습니다.");
+            MessageBox.Show(
+                $"브라우저를 열지 못했습니다. 직접 방문하세요:\n{UpdateCheckService.ReleasesPageUrl}",
+                "eslee OneKey");
         }
     }
 
@@ -516,6 +600,11 @@ public partial class MainWindow : Window
         }
         _httpClient?.Dispose();
         _httpClient = null;
+        _updateTimer?.Stop();
+        _updateTimer = null;
+        _updateHttpClient?.Dispose();
+        _updateHttpClient = null;
+        _updateChecker = null;
         _logger?.Info("app-stop", "eslee OneKey를 종료했습니다.");
         _trayFolderLink?.Dispose();
         _trayFolderLink = null;
