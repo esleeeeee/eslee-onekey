@@ -1,0 +1,13 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <OutputType>WinExe</OutputType>
+    <TargetFramework>net10.0-windows10.0.19041.0</TargetFramework>
+    <RootNamespace>Eslee.OneKey.App</RootNamespace>
+    <UseWPF>true</UseWPF>
+    <UseWindowsForms>true</UseWindowsForms>
+  </PropertyGroup>
+  <ItemGroup>
+    <ProjectReference Include="..\Eslee.OneKey.Core\Eslee.OneKey.Core.csproj" />
+    <ProjectReference Include="..\Eslee.OneKey.Infrastructure.Windows\Eslee.OneKey.Infrastructure.Windows.csproj" />
+  </ItemGroup>
+</Project>
