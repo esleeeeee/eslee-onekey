@@ -1,0 +1,10 @@
+<Solution>
+  <Folder Name="/src/">
+    <Project Path="src/Eslee.OneKey.Core/Eslee.OneKey.Core.csproj" />
+    <Project Path="src/Eslee.OneKey.Infrastructure.Windows/Eslee.OneKey.Infrastructure.Windows.csproj" />
+    <Project Path="src/Eslee.OneKey.App/Eslee.OneKey.App.csproj" />
+  </Folder>
+  <Folder Name="/tests/">
+    <Project Path="tests/Eslee.OneKey.Tests/Eslee.OneKey.Tests.csproj" />
+  </Folder>
+</Solution>
