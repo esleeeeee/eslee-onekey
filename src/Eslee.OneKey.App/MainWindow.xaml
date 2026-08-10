@@ -163,6 +163,20 @@
                     </Grid>
                 </ScrollViewer>
             </TabItem>
+
+            <TabItem Header="정보">
+                <StackPanel Margin="24">
+                    <TextBlock x:Name="VersionText" Text="eslee OneKey" FontSize="20" FontWeight="SemiBold" />
+                    <TextBlock Text="단축키로 앱 실행, 오디오 전환, 종료 후 안전 복원"
+                               Foreground="#69677A" Margin="0,6,0,18" />
+                    <TextBlock x:Name="UpdateStatusText" Text="업데이트를 아직 확인하지 않았습니다."
+                               TextWrapping="Wrap" Margin="0,0,0,12" />
+                    <WrapPanel>
+                        <Button x:Name="CheckUpdateButton" Content="업데이트 확인" Click="CheckUpdate_Click" />
+                        <Button Content="Release 페이지 열기" Click="OpenReleasePage_Click" />
+                    </WrapPanel>
+                </StackPanel>
+            </TabItem>
         </TabControl>
     </Grid>
 </Window>
