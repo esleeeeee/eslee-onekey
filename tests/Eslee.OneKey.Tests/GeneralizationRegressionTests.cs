@@ -73,6 +73,35 @@ public sealed class GeneralizationRegressionTests
             Assert.DoesNotContain(term, text, StringComparison.OrdinalIgnoreCase));
     }
 
+    /// <summary>
+    /// Grid.Row 인덱스가 RowDefinition 개수를 넘으면 WPF가 예외 없이 마지막 행에
+    /// 요소를 겹쳐 그린다. 행을 추가할 때 정의를 함께 늘리지 않는 실수를 잡는다.
+    /// </summary>
+    [Fact]
+    public void EveryGridRowIndexHasAMatchingRowDefinition()
+    {
+        var xaml = File.ReadAllText(
+            Path.Combine(FindRepositoryRoot(), "src", "Eslee.OneKey.App", "MainWindow.xaml"));
+
+        var definitionCounts = System.Text.RegularExpressions.Regex
+            .Matches(xaml, "<Grid.RowDefinitions>.*?</Grid.RowDefinitions>",
+                System.Text.RegularExpressions.RegexOptions.Singleline)
+            .Select(match => System.Text.RegularExpressions.Regex
+                .Matches(match.Value, "<RowDefinition").Count)
+            .ToArray();
+        var maxRowIndex = System.Text.RegularExpressions.Regex
+            .Matches(xaml, "Grid\\.Row=\"(\\d+)\"")
+            .Select(match => int.Parse(match.Groups[1].Value))
+            .DefaultIfEmpty(0)
+            .Max();
+
+        Assert.NotEmpty(definitionCounts);
+        // 가장 큰 Grid.Row는 어느 한 Grid의 RowDefinition 개수 안에 들어와야 한다.
+        Assert.True(
+            maxRowIndex < definitionCounts.Max(),
+            $"Grid.Row 최대값 {maxRowIndex}가 RowDefinition 최대 개수 {definitionCounts.Max()}를 벗어납니다.");
+    }
+
     private static string FindRepositoryRoot()
     {
         var directory = new DirectoryInfo(AppContext.BaseDirectory);
