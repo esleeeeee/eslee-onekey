@@ -32,6 +32,7 @@ public partial class MainWindow : Window
     private HttpClient? _httpClient;
     private TrayIconService? _tray;
     private TrayFolderLink? _trayFolderLink;
+    private DiscordRpcVoiceChannelClient? _rpcVoiceClient;
     private HttpClient? _updateHttpClient;
     private UpdateCheckService? _updateChecker;
     private DispatcherTimer? _updateTimer;
@@ -87,6 +88,7 @@ public partial class MainWindow : Window
             _appSettings = await _settingsStore.LoadAsync(CancellationToken.None);
             _automation = _appSettings.Automations.FirstOrDefault() ?? new AutomationSettings();
             ApplySettingsToControls();
+            await RefreshRpcStatusAsync();
             await RefreshAudioEndpointsAsync();
             await StartRuntimeAsync();
             UpdateStatus();
@@ -219,6 +221,11 @@ public partial class MainWindow : Window
         }
         _httpClient?.Dispose();
         _httpClient = null;
+        if (_rpcVoiceClient is not null)
+        {
+            await _rpcVoiceClient.DisposeAsync();
+            _rpcVoiceClient = null;
+        }
         _engine = null;
 
         if (!_automation.Enabled ||
@@ -242,7 +249,8 @@ public partial class MainWindow : Window
             voiceClient,
             _sessionStore,
             new SystemClock(),
-            _logger);
+            _logger,
+            CreateVoiceChannelAutoJoin());
         _engine.StateChanged += Engine_StateChanged;
 
         var windowHandle = new WindowInteropHelper(this).Handle;
@@ -253,6 +261,141 @@ public partial class MainWindow : Window
         if (_coordinator.LastError is not null)
         {
             _tray?.ShowBalloon("전역 단축키 등록 실패", _coordinator.LastError);
+        }
+    }
+
+    /// <summary>
+    /// 음성채널 자동 입장은 Discord 연동과 자동 입장이 모두 켜져 있을 때만 구성합니다.
+    /// 실패해도 자동화 자체는 그대로 동작합니다.
+    /// </summary>
+    private VoiceChannelAutoJoin? CreateVoiceChannelAutoJoin()
+    {
+        if (!_automation.UseDiscordIntegration ||
+            !_automation.AutoJoinVoiceChannel ||
+            _logger is null)
+        {
+            return null;
+        }
+
+        _rpcVoiceClient = new DiscordRpcVoiceChannelClient(
+            _automation.DiscordRpcClientId,
+            async cancellationToken => (await GetUsableRpcTokensAsync(cancellationToken))?.AccessToken,
+            TimeSpan.FromSeconds(20));
+        return new VoiceChannelAutoJoin(_rpcVoiceClient, _logger);
+    }
+
+    private async Task<DiscordRpcTokens?> LoadRpcTokensAsync(CancellationToken cancellationToken)
+    {
+        if (_secretStore is null)
+        {
+            return null;
+        }
+        var payload = await _secretStore.LoadRpcSecretsAsync(cancellationToken);
+        if (string.IsNullOrWhiteSpace(payload))
+        {
+            return null;
+        }
+        try
+        {
+            return System.Text.Json.JsonSerializer.Deserialize<DiscordRpcTokens>(payload);
+        }
+        catch (System.Text.Json.JsonException)
+        {
+            return null;
+        }
+    }
+
+    /// <summary>
+    /// 만료가 임박했으면 refresh_token으로 조용히 갱신합니다. 갱신에 실패하면 기존
+    /// 토큰을 그대로 써 보고, 그것도 실패하면 사용자에게 재연결을 안내합니다.
+    /// </summary>
+    private async Task<DiscordRpcTokens?> GetUsableRpcTokensAsync(CancellationToken cancellationToken)
+    {
+        var tokens = await LoadRpcTokensAsync(cancellationToken);
+        if (tokens is null || !DiscordRpcAuthorizer.NeedsRefresh(tokens) || _secretStore is null)
+        {
+            return tokens;
+        }
+
+        try
+        {
+            using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
+            var refreshed = await new DiscordRpcAuthorizer(client).RefreshAsync(
+                _automation.DiscordRpcClientId,
+                tokens,
+                cancellationToken);
+            if (refreshed is null)
+            {
+                return tokens;
+            }
+
+            await _secretStore.SaveRpcSecretsAsync(
+                System.Text.Json.JsonSerializer.Serialize(refreshed),
+                cancellationToken);
+            _logger?.Info("rpc-token-refreshed", "Discord RPC 토큰을 갱신했습니다.");
+            return refreshed;
+        }
+        catch (Exception exception) when (exception is HttpRequestException
+            or System.Text.Json.JsonException
+            or IOException)
+        {
+            _logger?.Warning("rpc-token-refresh-failed", "Discord RPC 토큰 갱신에 실패했습니다.");
+            return tokens;
+        }
+    }
+
+    private async Task RefreshRpcStatusAsync()
+    {
+        var tokens = await LoadRpcTokensAsync(CancellationToken.None);
+        RpcStatusText.Text = tokens is null
+            ? "미연결"
+            : DiscordRpcAuthorizer.NeedsRefresh(tokens) ? "갱신 필요" : "연결됨";
+    }
+
+    private async void ConnectRpc_Click(object sender, RoutedEventArgs e)
+    {
+        if (_secretStore is null)
+        {
+            return;
+        }
+
+        ConnectRpcButton.IsEnabled = false;
+        RpcStatusText.Text = "연결 중...";
+        try
+        {
+            var suppliedSecret = RpcClientSecretPassword.Password;
+            var storedSecret = (await LoadRpcTokensAsync(CancellationToken.None))?.ClientSecret;
+            using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
+            var (result, tokens) = await new DiscordRpcAuthorizer(client).AuthorizeAsync(
+                RpcClientIdText.Text.Trim(),
+                string.IsNullOrWhiteSpace(suppliedSecret) ? storedSecret : suppliedSecret,
+                CancellationToken.None);
+
+            if (result.Succeeded && tokens is not null)
+            {
+                await _secretStore.SaveRpcSecretsAsync(
+                    System.Text.Json.JsonSerializer.Serialize(tokens),
+                    CancellationToken.None);
+                RpcClientSecretPassword.Clear();
+                RpcStatusText.Text = "연결됨";
+                _logger?.Info("rpc-connected", "Discord RPC 인증을 완료했습니다.");
+            }
+            else
+            {
+                RpcStatusText.Text = "연결 실패";
+                _logger?.Warning("rpc-connect-failed", "Discord RPC 인증에 실패했습니다.");
+            }
+            MessageBox.Show(result.Message, "Discord 연결");
+        }
+        catch (Exception exception)
+        {
+            RpcStatusText.Text = "연결 실패";
+            _logger?.Error("rpc-connect-failed", exception, "Discord RPC 인증 중 오류가 발생했습니다.");
+            MessageBox.Show(exception.Message, "Discord 연결", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+        finally
+        {
+            ConnectRpcButton.IsEnabled = true;
         }
     }
 
@@ -271,6 +414,9 @@ public partial class MainWindow : Window
         DiscordPathText.Text = _automation.DiscordExecutablePath;
         DiscordProcessText.Text = _automation.DiscordProcessName;
         ApiUrlText.Text = _automation.DiscordApiBaseUrl;
+        AutoJoinVoiceCheck.IsChecked = _automation.AutoJoinVoiceChannel;
+        VoiceChannelTargetText.Text = _automation.VoiceChannelTarget;
+        RpcClientIdText.Text = _automation.DiscordRpcClientId;
         RestoreAudioCheck.IsChecked = _automation.RestoreAudioOnExit;
         DeferRestoreCheck.IsChecked = _automation.DeferRestoreWhileDiscordInVoice;
         StartupCheck.IsChecked = _appSettings.StartWithWindows || _startup.IsEnabled();
@@ -312,6 +458,9 @@ public partial class MainWindow : Window
         DiscordProcessName = WindowsProcessService.NormalizeProcessName(DiscordProcessText.Text),
         TargetAudioEndpointId = AudioEndpointCombo.SelectedValue as string ?? string.Empty,
         DiscordApiBaseUrl = ApiUrlText.Text.Trim(),
+        AutoJoinVoiceChannel = AutoJoinVoiceCheck.IsChecked == true,
+        VoiceChannelTarget = VoiceChannelTargetText.Text.Trim(),
+        DiscordRpcClientId = RpcClientIdText.Text.Trim(),
         RestoreAudioOnExit = RestoreAudioCheck.IsChecked == true,
         DeferRestoreWhileDiscordInVoice = DeferRestoreCheck.IsChecked == true,
         ProcessPollInterval = TimeSpan.FromSeconds(1),
@@ -390,6 +539,20 @@ public partial class MainWindow : Window
         {
             throw new InvalidOperationException("전환할 헤드셋을 선택하세요.");
         }
+        // 자동 입장은 Discord 연동을 켠 경우에만 동작하므로 그때만 값을 요구한다.
+        if (settings.UseDiscordIntegration && settings.AutoJoinVoiceChannel)
+        {
+            if (!DiscordChannelTarget.TryParse(settings.VoiceChannelTarget, out _))
+            {
+                throw new InvalidOperationException(
+                    "음성채널 링크 또는 Channel ID를 올바르게 입력하세요.");
+            }
+            if (string.IsNullOrWhiteSpace(settings.DiscordRpcClientId))
+            {
+                throw new InvalidOperationException("RPC Client ID를 입력하세요.");
+            }
+        }
+
         // 복원 보류는 자동 복원을 켠 경우에만 동작하므로 그때만 API 설정을 요구한다.
         if (settings.UseDiscordIntegration &&
             settings.RestoreAudioOnExit &&
@@ -618,6 +781,11 @@ public partial class MainWindow : Window
         }
         _httpClient?.Dispose();
         _httpClient = null;
+        if (_rpcVoiceClient is not null)
+        {
+            await _rpcVoiceClient.DisposeAsync();
+            _rpcVoiceClient = null;
+        }
         _updateTimer?.Stop();
         _updateTimer = null;
         _updateHttpClient?.Dispose();

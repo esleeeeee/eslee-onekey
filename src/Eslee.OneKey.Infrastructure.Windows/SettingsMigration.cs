@@ -13,7 +13,7 @@ namespace Eslee.OneKey.Infrastructure.Windows;
 /// </summary>
 public static class SettingsMigration
 {
-    public const int CurrentSchemaVersion = 3;
+    public const int CurrentSchemaVersion = 4;
 
     public static JsonNode Migrate(JsonNode? root)
     {
@@ -38,7 +38,11 @@ public static class SettingsMigration
                 {
                     MigrateAutomationFromV1(automation);
                 }
-                MigrateAutomationToV3(automation);
+                if (version < 3)
+                {
+                    MigrateAutomationToV3(automation);
+                }
+                MigrateAutomationToV4(automation);
             }
         }
         settings["schemaVersion"] = CurrentSchemaVersion;
@@ -85,6 +89,18 @@ public static class SettingsMigration
 
         // v3부터는 Discord가 이미 실행 중이어도 창을 전면으로 가져오지 않는다.
         automation.Remove("bringDiscordToFront");
+    }
+
+    /// <summary>
+    /// v4는 Discord 음성채널 자동 입장을 추가합니다. 새 기능이므로 기본값은 꺼짐이며,
+    /// 기존 설정값은 하나도 건드리지 않습니다. RPC 토큰과 client secret은 이 파일이
+    /// 아니라 DPAPI 저장소에만 기록합니다.
+    /// </summary>
+    private static void MigrateAutomationToV4(JsonObject automation)
+    {
+        automation["autoJoinVoiceChannel"] ??= false;
+        automation["voiceChannelTarget"] ??= string.Empty;
+        automation["discordRpcClientId"] ??= string.Empty;
     }
 
     private static void RenameProperty(JsonObject target, string oldName, string newName)

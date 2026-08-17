@@ -58,6 +58,59 @@ public sealed class DpapiSecretStore(ApplicationPaths paths) : ISecretStore
         return Task.CompletedTask;
     }
 
+    /// <summary>
+    /// Discord RPC OAuth 토큰(그리고 사용자가 직접 입력한 client secret)을 DPAPI로만
+    /// 보관합니다. settings.json이나 로그에는 절대 기록하지 않습니다.
+    /// </summary>
+    public async Task SaveRpcSecretsAsync(string payload, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(payload))
+        {
+            throw new ArgumentException("RPC 보관값은 비어 있을 수 없습니다.", nameof(payload));
+        }
+
+        paths.EnsureDirectories();
+        var plainBytes = Encoding.UTF8.GetBytes(payload);
+        try
+        {
+            var protectedBytes = Protect(plainBytes);
+            await File.WriteAllBytesAsync(paths.RpcSecretFile, protectedBytes, cancellationToken);
+            Array.Clear(protectedBytes);
+        }
+        finally
+        {
+            Array.Clear(plainBytes);
+        }
+    }
+
+    public async Task<string?> LoadRpcSecretsAsync(CancellationToken cancellationToken)
+    {
+        if (!File.Exists(paths.RpcSecretFile))
+        {
+            return null;
+        }
+        var protectedBytes = await File.ReadAllBytesAsync(paths.RpcSecretFile, cancellationToken);
+        var plainBytes = Unprotect(protectedBytes);
+        try
+        {
+            return Encoding.UTF8.GetString(plainBytes);
+        }
+        finally
+        {
+            Array.Clear(plainBytes);
+        }
+    }
+
+    public Task ClearRpcSecretsAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        if (File.Exists(paths.RpcSecretFile))
+        {
+            File.Delete(paths.RpcSecretFile);
+        }
+        return Task.CompletedTask;
+    }
+
     private static byte[] Protect(byte[] input) => Transform(input, protect: true);
     private static byte[] Unprotect(byte[] input) => Transform(input, protect: false);
 

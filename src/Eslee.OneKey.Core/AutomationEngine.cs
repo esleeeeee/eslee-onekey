@@ -17,6 +17,7 @@ public sealed class AutomationEngine
     private readonly ISessionStore _sessions;
     private readonly ISystemClock _clock;
     private readonly IAppLogger _logger;
+    private readonly VoiceChannelAutoJoin? _voiceChannelAutoJoin;
     private readonly SemaphoreSlim _gate = new(1, 1);
     private string? _originalAudioEndpointId;
     private string? _managedAudioEndpointId;
@@ -34,8 +35,10 @@ public sealed class AutomationEngine
         IDiscordVoiceStatusClient discordVoice,
         ISessionStore sessions,
         ISystemClock clock,
-        IAppLogger logger)
+        IAppLogger logger,
+        VoiceChannelAutoJoin? voiceChannelAutoJoin = null)
     {
+        _voiceChannelAutoJoin = voiceChannelAutoJoin;
         _settings = settings;
         _audio = audio;
         _processes = processes;
@@ -115,6 +118,7 @@ public sealed class AutomationEngine
 
             await EnsureLaunchTargetRunningAsync(trigger, cancellationToken);
             await EnsureDiscordRunningAsync(cancellationToken);
+            await TryJoinVoiceChannelAsync(cancellationToken);
 
             SetState(AutomationState.Active);
             await SaveSessionAsync(cancellationToken);
@@ -338,6 +342,32 @@ public sealed class AutomationEngine
         {
             LastError = "Discord 실행에 실패했습니다. 다른 자동화 동작은 유지합니다.";
             _logger.Error("discord-launch-failed", exception, LastError);
+        }
+    }
+
+    /// <summary>
+    /// 음성채널 자동 입장은 부가 기능이므로 어떤 실패도 자동화 시작을 실패시키지
+    /// 않습니다. 실행 파일 시작과 오디오 전환은 이미 끝난 뒤에 호출됩니다.
+    /// </summary>
+    private async Task TryJoinVoiceChannelAsync(CancellationToken cancellationToken)
+    {
+        if (_voiceChannelAutoJoin is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var result = await _voiceChannelAutoJoin.EnsureJoinedAsync(_settings, cancellationToken);
+            if (!result.IsSuccess)
+            {
+                LastError = result.Message ?? "Discord 음성채널 자동 입장에 실패했습니다.";
+            }
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            LastError = "Discord 음성채널 자동 입장에 실패했습니다. 다른 자동화 동작은 유지합니다.";
+            _logger.Error("voice-join-failed", exception, LastError);
         }
     }
 
