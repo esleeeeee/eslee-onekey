@@ -47,6 +47,8 @@ public sealed class GeneralizationRegressionTests
         Assert.Equal(string.Empty, defaults.WatchProcessName);
         Assert.Equal(string.Empty, defaults.LaunchExecutablePath);
         Assert.False(defaults.UseDiscordIntegration);
+        // 종료 후 오디오는 현재 장치 유지가 기본이다.
+        Assert.False(defaults.RestoreAudioOnExit);
     }
 
     [Theory]
@@ -57,6 +59,7 @@ public sealed class GeneralizationRegressionTests
     [InlineData(AutomationState.RestorePending, true, "Discord 통화 종료 대기")]
     [InlineData(AutomationState.Restoring, false, "복원 중")]
     [InlineData(AutomationState.Completed, false, "복원 완료")]
+    [InlineData(AutomationState.Restoring, true, "복원 중")]
     [InlineData(AutomationState.Failed, false, "오류")]
     public void StatusTextIsGeneralized(
         AutomationState state,

@@ -40,6 +40,38 @@ public sealed class SettingsMigrationTests
         }
         """;
 
+    private const string V2SettingsJson = """
+        {
+          "schemaVersion": 2,
+          "startWithWindows": true,
+          "automations": [
+            {
+              "id": "8d2e7e19-e3e6-4464-a2e2-ca4b6102a75b",
+              "name": "라이엇 클라이언트",
+              "enabled": true,
+              "hotkey": {
+                "control": true,
+                "alt": true,
+                "shift": true,
+                "windows": false,
+                "key": "V"
+              },
+              "watchProcessName": "VALORANT",
+              "launchExecutablePath": "C:\\Riot Games\\Riot Client\\RiotClientServices.exe",
+              "useDiscordIntegration": true,
+              "discordProcessName": "Discord",
+              "discordExecutablePath": "",
+              "bringDiscordToFront": true,
+              "targetAudioEndpointId": "{0.0.0.00000000}.{11111111-2222-3333-4444-555555555555}",
+              "discordApiBaseUrl": "https://bot.example.invalid",
+              "deferRestoreWhileDiscordInVoice": true,
+              "processPollInterval": "00:00:01",
+              "restorePollInterval": "00:00:05"
+            }
+          ]
+        }
+        """;
+
     private static async Task<T> WithStoreAsync<T>(string json, Func<JsonSettingsStore, Task<T>> action)
     {
         var root = Path.Combine(Path.GetTempPath(), "onekey-tests", Guid.NewGuid().ToString("N"));
@@ -119,6 +151,57 @@ public sealed class SettingsMigrationTests
         var settings = await WithStoreAsync(json, store => store.LoadAsync(CancellationToken.None));
 
         Assert.True(Assert.Single(settings.Automations).UseDiscordIntegration);
+    }
+
+    [Fact]
+    public async Task V2SettingsKeepEveryValueAndDefaultToKeepingCurrentDevice()
+    {
+        var settings = await WithStoreAsync(
+            V2SettingsJson,
+            store => store.LoadAsync(CancellationToken.None));
+
+        Assert.Equal(SettingsMigration.CurrentSchemaVersion, settings.SchemaVersion);
+        Assert.True(settings.StartWithWindows);
+
+        var automation = Assert.Single(settings.Automations);
+        Assert.Equal(Guid.Parse("8d2e7e19-e3e6-4464-a2e2-ca4b6102a75b"), automation.Id);
+        Assert.Equal("라이엇 클라이언트", automation.Name);
+        Assert.Equal(new HotkeyGesture(true, true, true, false, "V"), automation.Hotkey);
+        Assert.Equal("VALORANT", automation.WatchProcessName);
+        Assert.Equal(@"C:\Riot Games\Riot Client\RiotClientServices.exe", automation.LaunchExecutablePath);
+        Assert.True(automation.UseDiscordIntegration);
+        Assert.Equal("Discord", automation.DiscordProcessName);
+        Assert.Equal("https://bot.example.invalid", automation.DiscordApiBaseUrl);
+        Assert.Equal(
+            "{0.0.0.00000000}.{11111111-2222-3333-4444-555555555555}",
+            automation.TargetAudioEndpointId);
+        Assert.True(automation.DeferRestoreWhileDiscordInVoice);
+        // v3 기본값: 종료 후 현재 장치를 유지한다.
+        Assert.False(automation.RestoreAudioOnExit);
+    }
+
+    [Fact]
+    public async Task V1SettingsAlsoDefaultToKeepingCurrentDevice()
+    {
+        var settings = await WithStoreAsync(
+            V1SettingsJson,
+            store => store.LoadAsync(CancellationToken.None));
+
+        Assert.False(Assert.Single(settings.Automations).RestoreAudioOnExit);
+    }
+
+    [Fact]
+    public async Task ExplicitRestoreOptInIsPreserved()
+    {
+        var json = V2SettingsJson
+            .Replace("\"schemaVersion\": 2", "\"schemaVersion\": 3")
+            .Replace(
+                "\"deferRestoreWhileDiscordInVoice\": true",
+                "\"restoreAudioOnExit\": true,\n      \"deferRestoreWhileDiscordInVoice\": true");
+
+        var settings = await WithStoreAsync(json, store => store.LoadAsync(CancellationToken.None));
+
+        Assert.True(Assert.Single(settings.Automations).RestoreAudioOnExit);
     }
 
     [Fact]
