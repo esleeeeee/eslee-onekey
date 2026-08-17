@@ -37,6 +37,10 @@ public sealed class AutomationCoordinator : IAsyncDisposable
             LastError = registration.Error ?? "전역 단축키 등록에 실패했습니다.";
         }
 
+        // 감시 프로세스가 이미 실행 중이면 감시 시작이 곧바로 자동화를 트리거하므로,
+        // 이전 세션 복구를 먼저 끝내 진행 중인 실행과 뒤엉키지 않게 한다.
+        await _engine.RecoverStaleSessionAsync(cancellationToken);
+
         if (!string.IsNullOrWhiteSpace(_settings.WatchProcessName))
         {
             await _processMonitor.StartAsync(
@@ -44,8 +48,6 @@ public sealed class AutomationCoordinator : IAsyncDisposable
                 _settings.ProcessPollInterval,
                 cancellationToken);
         }
-
-        await _engine.RecoverStaleSessionAsync(cancellationToken);
     }
 
     public void SetPaused(bool paused) => IsPaused = paused;

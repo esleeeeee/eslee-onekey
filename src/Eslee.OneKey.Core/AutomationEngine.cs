@@ -21,6 +21,12 @@ public sealed class AutomationEngine
     private string? _originalAudioEndpointId;
     private string? _managedAudioEndpointId;
 
+    /// <summary>
+    /// 이번 시작 직전의 기본 출력 장치입니다. 시작이 실패했을 때 "이번 시작이 바꾼
+    /// 것만" 되돌리기 위한 기준이며, 장기 보존되는 복원 대상과는 별개입니다.
+    /// </summary>
+    private string? _startEntryEndpointId;
+
     public AutomationEngine(
         AutomationSettings settings,
         IAudioEndpointService audio,
@@ -43,6 +49,12 @@ public sealed class AutomationEngine
     public DateTimeOffset? LastRunAt { get; private set; }
     public string? LastError { get; private set; }
     public bool RestorePending => State == AutomationState.RestorePending;
+
+    /// <summary>
+    /// 마지막으로 완료된 자동화가 복원 대신 현재 장치를 유지했는지 여부입니다.
+    /// 상태 표시에서 실제 복원과 유지를 구분하는 데 사용합니다.
+    /// </summary>
+    public bool KeptCurrentDevice { get; private set; }
     public event EventHandler? StateChanged;
 
     public async Task<AutomationStartResult> StartAsync(
@@ -67,12 +79,24 @@ public sealed class AutomationEngine
             SetState(AutomationState.Starting);
             LastRunAt = _clock.UtcNow;
             LastError = null;
+            KeptCurrentDevice = false;
             _logger.Info("automation-start", $"자동화를 시작합니다. trigger={trigger}");
 
-            _originalAudioEndpointId = await _audio.GetDefaultOutputIdAsync(cancellationToken);
-            if (string.IsNullOrWhiteSpace(_originalAudioEndpointId))
+            var currentEndpointId = await _audio.GetDefaultOutputIdAsync(cancellationToken);
+            if (string.IsNullOrWhiteSpace(currentEndpointId))
             {
                 throw new InvalidOperationException("현재 기본 오디오 출력장치를 확인할 수 없습니다.");
+            }
+
+            _startEntryEndpointId = currentEndpointId;
+
+            // 이전 실행에서 전환한 장치가 아직 기본값이면(복원을 건너뛴 경우) 그때의
+            // 원래 장치를 계속 복원 대상으로 둔다. 그러지 않으면 두 번째 실행부터
+            // 원래 장치 기록이 전환 대상 장치로 덮어써진다.
+            if (string.IsNullOrWhiteSpace(_originalAudioEndpointId) ||
+                currentEndpointId != _managedAudioEndpointId)
+            {
+                _originalAudioEndpointId = currentEndpointId;
             }
 
             var endpoints = await _audio.GetOutputEndpointsAsync(cancellationToken);
@@ -121,6 +145,16 @@ public sealed class AutomationEngine
             }
 
             _logger.Info("watched-process-exited", "대상 프로세스 종료를 감지했습니다.");
+            if (!_settings.RestoreAudioOnExit)
+            {
+                // 자동 복원이 꺼져 있으면 오디오를 그대로 두고 자동화를 끝낸다.
+                // Discord 통화 확인이나 복원 대기 상태로도 들어가지 않는다.
+                _logger.Info("restore-skipped", "자동 복원이 꺼져 있어 현재 오디오 장치를 유지합니다.");
+                KeptCurrentDevice = true;
+                await CompleteAsync(cancellationToken, keepRestoreTarget: true);
+                return;
+            }
+
             await EvaluateRestoreAsync(cancellationToken);
         }
         finally
@@ -171,7 +205,14 @@ public sealed class AutomationEngine
             }
 
             SetState(AutomationState.Restoring);
-            await _audio.SetDefaultOutputAsync(_originalAudioEndpointId, cancellationToken);
+            if (!await TrySetDefaultOutputAsync(_originalAudioEndpointId, cancellationToken))
+            {
+                // 복원 대상을 유지한 채 오류만 알린다. 장치를 다시 연결하면 재시도할 수 있다.
+                SetState(AutomationState.Failed);
+                return;
+            }
+
+            KeptCurrentDevice = false;
             await CompleteAsync(cancellationToken);
             _logger.Info("manual-restore", "사용자 요청으로 원래 오디오 장치를 복원했습니다.");
         }
@@ -187,6 +228,7 @@ public sealed class AutomationEngine
         try
         {
             LastError = null;
+            KeptCurrentDevice = true;
             await CompleteAsync(cancellationToken);
             _logger.Info("automation-stopped", "현재 오디오 장치를 유지하고 자동화를 종료했습니다.");
         }
@@ -198,7 +240,37 @@ public sealed class AutomationEngine
 
     public async Task RecoverStaleSessionAsync(CancellationToken cancellationToken = default)
     {
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            // 이미 이 엔진에서 자동화가 시작됐다면 진행 중인 상태를 덮어쓰지 않는다.
+            if (State != AutomationState.Idle)
+            {
+                return;
+            }
+
+            await RecoverSessionCoreAsync(cancellationToken);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    private async Task RecoverSessionCoreAsync(CancellationToken cancellationToken)
+    {
         var session = await _sessions.LoadAsync(cancellationToken);
+        if (session is { State: AutomationState.Completed })
+        {
+            // 복원을 건너뛰고 현재 장치를 유지한 채 끝난 세션입니다. 오디오는 그대로
+            // 두고, 사용자가 수동 복원을 누를 수 있도록 대상만 되살립니다.
+            _originalAudioEndpointId = session.OriginalAudioEndpointId;
+            _managedAudioEndpointId = session.ManagedAudioEndpointId;
+            LastRunAt = session.LastRunAt;
+            KeptCurrentDevice = true;
+            return;
+        }
+
         if (session is null || !BusyStates.Contains(session.State))
         {
             return;
@@ -246,10 +318,7 @@ public sealed class AutomationEngine
 
         if (await _processes.IsRunningAsync(_settings.DiscordProcessName, cancellationToken))
         {
-            if (_settings.BringDiscordToFront)
-            {
-                await _processes.BringToFrontAsync(_settings.DiscordProcessName, cancellationToken);
-            }
+            // 이미 실행 중이면 창을 전면으로 가져오지 않고 그대로 둔다.
             return;
         }
 
@@ -329,19 +398,60 @@ public sealed class AutomationEngine
         {
             LastError = "사용자가 오디오 장치를 수동 변경하여 자동 복원을 취소했습니다.";
             _logger.Warning("restore-cancelled-user-change", LastError);
+            KeptCurrentDevice = true;
             await CompleteAsync(cancellationToken, preserveError: true);
             return;
         }
 
         SetState(AutomationState.Restoring);
-        await _audio.SetDefaultOutputAsync(_originalAudioEndpointId, cancellationToken);
+        if (!await TrySetDefaultOutputAsync(_originalAudioEndpointId, cancellationToken))
+        {
+            SetState(AutomationState.Failed);
+            return;
+        }
+
         _logger.Info("audio-restored", "원래 오디오 출력장치를 복원했습니다.");
+        KeptCurrentDevice = false;
         await CompleteAsync(cancellationToken);
     }
 
+    /// <summary>
+    /// 복원 대상이 아직 연결돼 있을 때만 기본 출력으로 지정합니다. 장치가 사라졌거나
+    /// 전환이 실패해도 예외를 밖으로 던지지 않고 오류로만 알립니다. 복원 대상은
+    /// 앱 재시작을 넘어 살아남을 수 있어 그 사이 장치가 제거될 수 있습니다.
+    /// </summary>
+    private async Task<bool> TrySetDefaultOutputAsync(
+        string endpointId,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            var endpoints = await _audio.GetOutputEndpointsAsync(cancellationToken);
+            if (!endpoints.Any(endpoint => endpoint.IsActive && endpoint.Id == endpointId))
+            {
+                LastError = "복원할 오디오 장치가 연결되어 있지 않습니다. 장치를 연결한 뒤 다시 시도하세요.";
+                _logger.Warning("restore-target-unavailable", LastError);
+                return false;
+            }
+
+            await _audio.SetDefaultOutputAsync(endpointId, cancellationToken);
+            return true;
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            LastError = "오디오 장치 복원에 실패했습니다.";
+            _logger.Error("restore-failed", exception, LastError);
+            return false;
+        }
+    }
+
+    /// <summary>
+    /// 시작이 실패했을 때 이번 시작이 실제로 바꾼 오디오 변경만 되돌립니다. 이전
+    /// 실행에서 유지하기로 한 장치는 건드리지 않으며, 그 복원 대상도 그대로 둡니다.
+    /// </summary>
     private async Task RestoreAfterFailedStartAsync(CancellationToken cancellationToken)
     {
-        if (string.IsNullOrWhiteSpace(_originalAudioEndpointId) ||
+        if (string.IsNullOrWhiteSpace(_startEntryEndpointId) ||
             string.IsNullOrWhiteSpace(_managedAudioEndpointId))
         {
             return;
@@ -350,10 +460,16 @@ public sealed class AutomationEngine
         try
         {
             var current = await _audio.GetDefaultOutputIdAsync(cancellationToken);
-            if (current == _managedAudioEndpointId)
+            if (current != _managedAudioEndpointId || current == _startEntryEndpointId)
             {
-                await _audio.SetDefaultOutputAsync(_originalAudioEndpointId, cancellationToken);
+                // 이번 시작이 기본 장치를 바꾸지 않았다. 되돌릴 것이 없다.
+                return;
             }
+
+            await _audio.SetDefaultOutputAsync(_startEntryEndpointId, cancellationToken);
+            _logger.Info("failed-start-rolled-back", "시작 실패로 이번에 바꾼 오디오 장치를 되돌렸습니다.");
+            _originalAudioEndpointId = null;
+            _managedAudioEndpointId = null;
             await _sessions.ClearAsync(cancellationToken);
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
@@ -362,15 +478,26 @@ public sealed class AutomationEngine
         }
     }
 
+    /// <param name="keepRestoreTarget">
+    /// 자동 복원을 건너뛴 경우에도 사용자가 "지금 원래 장치로 복원"을 누를 수 있도록
+    /// 원래 장치 정보를 남겨 둡니다. 앱을 다시 시작해도 남아 있도록 세션에 기록합니다.
+    /// </param>
     private async Task CompleteAsync(
         CancellationToken cancellationToken,
-        bool preserveError = false)
+        bool preserveError = false,
+        bool keepRestoreTarget = false)
     {
         if (!preserveError)
         {
             LastError = null;
         }
         SetState(AutomationState.Completed);
+        if (keepRestoreTarget)
+        {
+            await SaveSessionAsync(cancellationToken);
+            return;
+        }
+
         await _sessions.ClearAsync(cancellationToken);
         _originalAudioEndpointId = null;
         _managedAudioEndpointId = null;

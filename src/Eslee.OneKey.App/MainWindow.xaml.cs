@@ -271,9 +271,19 @@ public partial class MainWindow : Window
         DiscordPathText.Text = _automation.DiscordExecutablePath;
         DiscordProcessText.Text = _automation.DiscordProcessName;
         ApiUrlText.Text = _automation.DiscordApiBaseUrl;
+        RestoreAudioCheck.IsChecked = _automation.RestoreAudioOnExit;
         DeferRestoreCheck.IsChecked = _automation.DeferRestoreWhileDiscordInVoice;
         StartupCheck.IsChecked = _appSettings.StartWithWindows || _startup.IsEnabled();
+        UpdateRestorePolicyEnabled();
     }
+
+    /// <summary>복원 보류는 자동 복원과 Discord 연동을 모두 켠 경우에만 의미가 있습니다.</summary>
+    private void UpdateRestorePolicyEnabled() =>
+        DeferRestoreCheck.IsEnabled =
+            RestoreAudioCheck.IsChecked == true && UseDiscordCheck.IsChecked == true;
+
+    private void RestoreAudioCheck_Changed(object sender, RoutedEventArgs e) =>
+        UpdateRestorePolicyEnabled();
 
     private async Task RefreshAudioEndpointsAsync()
     {
@@ -300,9 +310,9 @@ public partial class MainWindow : Window
         UseDiscordIntegration = UseDiscordCheck.IsChecked == true,
         DiscordExecutablePath = DiscordPathText.Text.Trim(),
         DiscordProcessName = WindowsProcessService.NormalizeProcessName(DiscordProcessText.Text),
-        BringDiscordToFront = true,
         TargetAudioEndpointId = AudioEndpointCombo.SelectedValue as string ?? string.Empty,
         DiscordApiBaseUrl = ApiUrlText.Text.Trim(),
+        RestoreAudioOnExit = RestoreAudioCheck.IsChecked == true,
         DeferRestoreWhileDiscordInVoice = DeferRestoreCheck.IsChecked == true,
         ProcessPollInterval = TimeSpan.FromSeconds(1),
         RestorePollInterval = TimeSpan.FromSeconds(5),
@@ -380,7 +390,10 @@ public partial class MainWindow : Window
         {
             throw new InvalidOperationException("전환할 헤드셋을 선택하세요.");
         }
-        if (settings.UseDiscordIntegration && settings.DeferRestoreWhileDiscordInVoice)
+        // 복원 보류는 자동 복원을 켠 경우에만 동작하므로 그때만 API 설정을 요구한다.
+        if (settings.UseDiscordIntegration &&
+            settings.RestoreAudioOnExit &&
+            settings.DeferRestoreWhileDiscordInVoice)
         {
             if (!DiscordVoiceStatusClient.TryBuildEndpoint(settings.DiscordApiBaseUrl, out _))
             {
@@ -505,7 +518,10 @@ public partial class MainWindow : Window
         AutomationNameStatus.Text = _automation.Name;
         EnabledStatus.Text = _automation.Enabled ? "활성" : "비활성";
         var state = _engine?.State ?? AutomationState.Idle;
-        StateStatus.Text = AutomationStatusText.ForState(state, WaitsForDiscordVoice);
+        StateStatus.Text = AutomationStatusText.ForState(
+            state,
+            WaitsForDiscordVoice,
+            _engine?.KeptCurrentDevice ?? false);
         LastRunStatus.Text = _engine?.LastRunAt?.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss") ?? "없음";
         LastErrorStatus.Text = _engine?.LastError ?? _coordinator?.LastError ?? "없음";
         _tray?.SetRestorePending(state == AutomationState.RestorePending);
@@ -521,7 +537,9 @@ public partial class MainWindow : Window
     }
 
     private bool WaitsForDiscordVoice =>
-        _automation.UseDiscordIntegration && _automation.DeferRestoreWhileDiscordInVoice;
+        _automation.RestoreAudioOnExit &&
+        _automation.UseDiscordIntegration &&
+        _automation.DeferRestoreWhileDiscordInVoice;
 
     private void MainWindow_Closing(object? sender, CancelEventArgs e)
     {
@@ -574,7 +592,7 @@ public partial class MainWindow : Window
 
     public void ShowCurrentStatus() => Dispatcher.Invoke(() =>
         MessageBox.Show(
-            $"상태: {AutomationStatusText.ForState(_engine?.State ?? AutomationState.Idle, WaitsForDiscordVoice)}\n" +
+            $"상태: {AutomationStatusText.ForState(_engine?.State ?? AutomationState.Idle, WaitsForDiscordVoice, _engine?.KeptCurrentDevice ?? false)}\n" +
             $"복원 대기: {_engine?.RestorePending ?? false}\n" +
             $"오류: {_engine?.LastError ?? _coordinator?.LastError ?? "없음"}",
             "eslee OneKey 현재 상태"));
