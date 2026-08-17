@@ -7,12 +7,13 @@ namespace Eslee.OneKey.Infrastructure.Windows;
 /// settings.json 스키마 마이그레이션. v1은 초기 MVP의 게임 중심 속성명
 /// (gameProcessName, gameExecutablePath)을 사용했고 Discord 연동이 항상 켜져
 /// 있었다. v2는 범용 속성명(watchProcessName, launchExecutablePath)과
-/// 명시적 useDiscordIntegration 플래그를 사용한다.
+/// 명시적 useDiscordIntegration 플래그를 사용한다. v3은 종료 후 오디오
+/// 자동 복원을 restoreAudioOnExit 옵션으로 분리한다.
 /// 기존 파일을 읽지 못해 설정이 초기화되는 일이 없도록 로드 시 변환한다.
 /// </summary>
 public static class SettingsMigration
 {
-    public const int CurrentSchemaVersion = 2;
+    public const int CurrentSchemaVersion = 3;
 
     public static JsonNode Migrate(JsonNode? root)
     {
@@ -33,7 +34,11 @@ public static class SettingsMigration
         {
             foreach (var automation in automations.OfType<JsonObject>())
             {
-                MigrateAutomationFromV1(automation);
+                if (version < 2)
+                {
+                    MigrateAutomationFromV1(automation);
+                }
+                MigrateAutomationToV3(automation);
             }
         }
         settings["schemaVersion"] = CurrentSchemaVersion;
@@ -67,6 +72,19 @@ public static class SettingsMigration
                 !string.IsNullOrWhiteSpace(discordExecutablePath) ||
                 !deferRestore;
         }
+    }
+
+    /// <summary>
+    /// v2까지는 감시 프로세스가 종료되면 항상 원래 장치로 복원했다. v3부터는
+    /// 현재 장치를 유지하는 것이 기본이므로, 옵션이 없는 파일은 새 기본값을
+    /// 명시해 저장한다. 다른 설정값은 그대로 둔다.
+    /// </summary>
+    private static void MigrateAutomationToV3(JsonObject automation)
+    {
+        automation["restoreAudioOnExit"] ??= false;
+
+        // v3부터는 Discord가 이미 실행 중이어도 창을 전면으로 가져오지 않는다.
+        automation.Remove("bringDiscordToFront");
     }
 
     private static void RenameProperty(JsonObject target, string oldName, string newName)

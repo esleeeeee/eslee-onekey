@@ -60,9 +60,15 @@ public sealed record AutomationSettings
     public bool UseDiscordIntegration { get; init; }
     public string DiscordProcessName { get; init; } = "Discord";
     public string DiscordExecutablePath { get; init; } = string.Empty;
-    public bool BringDiscordToFront { get; init; } = true;
     public string TargetAudioEndpointId { get; init; } = string.Empty;
     public string DiscordApiBaseUrl { get; init; } = string.Empty;
+
+    /// <summary>
+    /// 감시 프로세스가 종료된 뒤 원래 오디오 장치로 자동 복원할지 여부입니다.
+    /// 기본값은 현재 장치 유지이며, 켰을 때만 복원과 복원 대기가 동작합니다.
+    /// </summary>
+    public bool RestoreAudioOnExit { get; init; }
+
     public bool DeferRestoreWhileDiscordInVoice { get; init; } = true;
     public TimeSpan ProcessPollInterval { get; init; } = TimeSpan.FromSeconds(1);
     public TimeSpan RestorePollInterval { get; init; } = TimeSpan.FromSeconds(5);
@@ -70,7 +76,7 @@ public sealed record AutomationSettings
 
 public sealed record AppSettings
 {
-    public int SchemaVersion { get; init; } = 2;
+    public int SchemaVersion { get; init; } = 3;
     public bool StartWithWindows { get; init; }
     public List<AutomationSettings> Automations { get; init; } = [new()];
 }
