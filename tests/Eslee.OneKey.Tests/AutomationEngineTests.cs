@@ -152,7 +152,7 @@ public sealed class AutomationEngineTests
     }
 
     [Fact]
-    public async Task AlreadyRunningDiscordIsNotStartedAgain()
+    public async Task AlreadyRunningDiscordIsNotStartedAgainOrBroughtToFront()
     {
         var harness = Harness.Create();
         harness.Processes.Running.Add("discord");
@@ -160,7 +160,7 @@ public sealed class AutomationEngineTests
         await harness.Engine.StartAsync(AutomationTrigger.Hotkey);
 
         Assert.DoesNotContain("discord.exe", harness.Processes.StartedPaths);
-        Assert.Contains("discord", harness.Processes.BroughtToFront);
+        Assert.Empty(harness.Processes.BroughtToFront);
     }
 
     [Fact]
@@ -202,6 +202,255 @@ public sealed class AutomationEngineTests
         Assert.Equal(0, harness.Voice.Calls);
     }
 
+    [Fact]
+    public async Task RestoreDisabledKeepsCurrentDeviceAndSkipsVoiceCheck()
+    {
+        // Discord 통화 중 상태를 넣어 두어도 복원이 꺼져 있으면 조회조차 하지 않는다.
+        var harness = Harness.CreateWithoutRestore(DiscordVoiceState.InVoice);
+        await harness.Engine.StartAsync(AutomationTrigger.Hotkey);
+
+        await harness.Engine.OnWatchedProcessExitedAsync();
+
+        Assert.Equal(AutomationState.Completed, harness.Engine.State);
+        Assert.False(harness.Engine.RestorePending);
+        Assert.Equal("headset", harness.Audio.DefaultId);
+        Assert.Equal(["headset"], harness.Audio.SetCalls);
+        Assert.Equal(0, harness.Voice.Calls);
+        Assert.Null(harness.Engine.LastError);
+    }
+
+    [Fact]
+    public async Task RestoreDisabledDoesNotStartRestorePollingFromCoordinator()
+    {
+        var harness = Harness.CreateWithoutRestore(DiscordVoiceState.InVoice);
+        await using var coordinator = new AutomationCoordinator(
+            harness.Settings,
+            harness.Engine,
+            new FakeHotkeyService(),
+            new FakeProcessMonitor());
+        await coordinator.InitializeAsync();
+        await coordinator.HandleHotkeyAsync();
+
+        await coordinator.HandleProcessExitedAsync();
+
+        Assert.Equal(AutomationState.Completed, harness.Engine.State);
+        Assert.False(harness.Engine.RestorePending);
+        Assert.Equal("headset", harness.Audio.DefaultId);
+        Assert.Equal(0, harness.Voice.Calls);
+    }
+
+    [Fact]
+    public async Task RestoreDisabledStillAllowsManualRestore()
+    {
+        var harness = Harness.CreateWithoutRestore();
+        await harness.Engine.StartAsync(AutomationTrigger.Hotkey);
+        await harness.Engine.OnWatchedProcessExitedAsync();
+
+        await harness.Engine.ManualRestoreAsync();
+
+        Assert.Equal("speaker", harness.Audio.DefaultId);
+        Assert.Equal(AutomationState.Completed, harness.Engine.State);
+    }
+
+    [Fact]
+    public async Task RestoreDisabledKeepsOriginalDeviceAcrossRepeatedRuns()
+    {
+        // 2회차 실행 시점의 기본 장치는 1회차에서 전환한 헤드셋이다. 이때
+        // 원래 장치 기록을 덮어쓰면 수동 복원이 무동작이 된다.
+        var harness = Harness.CreateWithoutRestore();
+        await harness.Engine.StartAsync(AutomationTrigger.Hotkey);
+        await harness.Engine.OnWatchedProcessExitedAsync();
+        await harness.Engine.StartAsync(AutomationTrigger.Hotkey);
+        await harness.Engine.OnWatchedProcessExitedAsync();
+
+        await harness.Engine.ManualRestoreAsync();
+
+        Assert.Equal("speaker", harness.Audio.DefaultId);
+    }
+
+    [Fact]
+    public async Task RestoreDisabledUsesCurrentDeviceAsOriginalWhenUserChangedItBetweenRuns()
+    {
+        var harness = Harness.CreateWithoutRestore();
+        await harness.Engine.StartAsync(AutomationTrigger.Hotkey);
+        await harness.Engine.OnWatchedProcessExitedAsync();
+        harness.Audio.DefaultId = "earbuds";
+
+        await harness.Engine.StartAsync(AutomationTrigger.Hotkey);
+        await harness.Engine.OnWatchedProcessExitedAsync();
+        await harness.Engine.ManualRestoreAsync();
+
+        Assert.Equal("earbuds", harness.Audio.DefaultId);
+    }
+
+    [Fact]
+    public async Task RestoreDisabledKeepsManualRestoreTargetAfterEngineRestart()
+    {
+        var harness = Harness.CreateWithoutRestore();
+        await harness.Engine.StartAsync(AutomationTrigger.Hotkey);
+        await harness.Engine.OnWatchedProcessExitedAsync();
+
+        // 앱 재시작이나 설정 저장으로 엔진이 새로 만들어져도 세션에서 되살린다.
+        var restarted = harness.CreateReplacementEngine();
+        await restarted.RecoverStaleSessionAsync();
+
+        Assert.Equal(AutomationState.Idle, restarted.State);
+        Assert.Empty(harness.Audio.SetCalls.Skip(1));
+        await restarted.ManualRestoreAsync();
+        Assert.Equal("speaker", harness.Audio.DefaultId);
+    }
+
+    [Fact]
+    public async Task CompletedStateDistinguishesKeptDeviceFromActualRestore()
+    {
+        var kept = Harness.CreateWithoutRestore();
+        await kept.Engine.StartAsync(AutomationTrigger.Hotkey);
+        await kept.Engine.OnWatchedProcessExitedAsync();
+
+        var restored = Harness.Create(DiscordVoiceState.NotInVoice);
+        await restored.Engine.StartAsync(AutomationTrigger.Hotkey);
+        await restored.Engine.OnWatchedProcessExitedAsync();
+
+        Assert.True(kept.Engine.KeptCurrentDevice);
+        Assert.Equal(
+            "현재 장치 유지",
+            AutomationStatusText.ForState(kept.Engine.State, false, kept.Engine.KeptCurrentDevice));
+        Assert.False(restored.Engine.KeptCurrentDevice);
+        Assert.Equal(
+            "복원 완료",
+            AutomationStatusText.ForState(
+                restored.Engine.State,
+                false,
+                restored.Engine.KeptCurrentDevice));
+    }
+
+    [Fact]
+    public async Task FailedStartAfterKeptDeviceDoesNotUndoTheKeptSwitch()
+    {
+        // 유지 완료 뒤 두 번째 시작이 실패해도 이번 시작이 바꾼 것이 없으므로
+        // 오디오를 되돌리면 안 된다(자동 복원을 꺼 둔 사용자의 선택 위반).
+        var harness = Harness.CreateWithoutRestore();
+        await harness.Engine.StartAsync(AutomationTrigger.Hotkey);
+        await harness.Engine.OnWatchedProcessExitedAsync();
+        harness.Processes.Running.Remove("game");
+        harness.Processes.FailNextStart = true;
+
+        var result = await harness.Engine.StartAsync(AutomationTrigger.Hotkey);
+
+        Assert.False(result.Started);
+        Assert.Equal(AutomationState.Failed, harness.Engine.State);
+        Assert.Equal("headset", harness.Audio.DefaultId);
+        Assert.DoesNotContain("speaker", harness.Audio.SetCalls);
+
+        // 유지해 둔 복원 대상도 살아 있어야 한다.
+        await harness.Engine.ManualRestoreAsync();
+        Assert.Equal("speaker", harness.Audio.DefaultId);
+    }
+
+    [Fact]
+    public async Task FailedStartRollsBackOnlyWhatThisStartChanged()
+    {
+        var harness = Harness.CreateWithoutRestore();
+        harness.Processes.FailNextStart = true;
+
+        var result = await harness.Engine.StartAsync(AutomationTrigger.Hotkey);
+
+        Assert.False(result.Started);
+        Assert.Equal(AutomationState.Failed, harness.Engine.State);
+        Assert.Equal("speaker", harness.Audio.DefaultId);
+        Assert.Equal(["headset", "speaker"], harness.Audio.SetCalls);
+    }
+
+    [Fact]
+    public async Task RestoreReportsErrorWhenOriginalDeviceIsGone()
+    {
+        var harness = Harness.Create(DiscordVoiceState.NotInVoice);
+        await harness.Engine.StartAsync(AutomationTrigger.Hotkey);
+        // 복원 직전에 원래 장치가 시스템에서 사라진 상황.
+        harness.Audio.Endpoints = [new AudioEndpoint("headset", "Headset", true)];
+
+        await harness.Engine.OnWatchedProcessExitedAsync();
+
+        Assert.Equal(AutomationState.Failed, harness.Engine.State);
+        Assert.Contains("연결", harness.Engine.LastError);
+        Assert.Equal("headset", harness.Audio.DefaultId);
+    }
+
+    [Fact]
+    public async Task ManualRestoreReportsErrorInsteadOfThrowingWhenSwitchFails()
+    {
+        var harness = Harness.CreateWithoutRestore();
+        await harness.Engine.StartAsync(AutomationTrigger.Hotkey);
+        await harness.Engine.OnWatchedProcessExitedAsync();
+        harness.Audio.ThrowOnSet = true;
+
+        await harness.Engine.ManualRestoreAsync();
+
+        Assert.Equal(AutomationState.Failed, harness.Engine.State);
+        Assert.Equal("headset", harness.Audio.DefaultId);
+        Assert.NotNull(harness.Engine.LastError);
+    }
+
+    [Fact]
+    public async Task SessionRecoveryNeverOverwritesAnAutomationAlreadyRunning()
+    {
+        var harness = Harness.CreateWithoutRestore();
+        await harness.Engine.StartAsync(AutomationTrigger.Hotkey);
+        harness.Sessions.Session = new AutomationSession
+        {
+            State = AutomationState.Completed,
+            OriginalAudioEndpointId = "earbuds",
+            ManagedAudioEndpointId = "earbuds",
+        };
+
+        await harness.Engine.RecoverStaleSessionAsync();
+
+        Assert.Equal(AutomationState.Active, harness.Engine.State);
+        Assert.False(harness.Engine.KeptCurrentDevice);
+        await harness.Engine.OnWatchedProcessExitedAsync();
+        await harness.Engine.ManualRestoreAsync();
+        Assert.Equal("speaker", harness.Audio.DefaultId);
+    }
+
+    [Fact]
+    public async Task CoordinatorRecoversBeforeAnAlreadyRunningProcessTriggersAutomation()
+    {
+        var harness = Harness.CreateWithoutRestore();
+        harness.Processes.Running.Add("game");
+        harness.Sessions.Session = new AutomationSession
+        {
+            State = AutomationState.Completed,
+            OriginalAudioEndpointId = "earbuds",
+            ManagedAudioEndpointId = "earbuds",
+        };
+        var monitor = new FakeProcessMonitor { RaiseStartedOnStart = true };
+        await using var coordinator = new AutomationCoordinator(
+            harness.Settings,
+            harness.Engine,
+            new FakeHotkeyService(),
+            monitor);
+
+        await coordinator.InitializeAsync();
+
+        // 감시 시작이 즉시 트리거한 실행이 복구 로직에 뒤집히지 않아야 한다.
+        Assert.Equal(AutomationState.Active, harness.Engine.State);
+        Assert.Null(harness.Engine.LastError);
+        Assert.Equal("headset", harness.Audio.DefaultId);
+    }
+
+    [Fact]
+    public async Task DiscordIntegrationStillRunsWhenRestoreDisabled()
+    {
+        var harness = Harness.CreateWithoutRestore();
+
+        var result = await harness.Engine.StartAsync(AutomationTrigger.Hotkey);
+
+        Assert.True(result.Started);
+        Assert.Equal(["game.exe", "discord.exe"], harness.Processes.StartedPaths);
+        Assert.Equal("headset", harness.Audio.DefaultId);
+        Assert.Equal(AutomationState.Active, harness.Engine.State);
+    }
+
     private sealed class Harness
     {
         private Harness(AutomationSettings settings, DiscordVoiceState[] states)
@@ -230,6 +479,17 @@ public sealed class AutomationEngineTests
         public FakeLogger Logger { get; }
         public AutomationEngine Engine { get; }
 
+        /// <summary>앱 재시작이나 설정 저장으로 엔진만 새로 만들어진 상황을 재현합니다.</summary>
+        public AutomationEngine CreateReplacementEngine() => new(
+            Settings,
+            Audio,
+            Processes,
+            Voice,
+            Sessions,
+            new FakeClock(),
+            Logger);
+
+        /// <summary>자동 복원을 켠 구성입니다. 기존 안전 복원 동작을 검증합니다.</summary>
         public static Harness Create(params DiscordVoiceState[] states) => new(
             new AutomationSettings
             {
@@ -240,6 +500,7 @@ public sealed class AutomationEngineTests
                 DiscordExecutablePath = "discord.exe",
                 TargetAudioEndpointId = "headset",
                 DiscordApiBaseUrl = "https://example.invalid",
+                RestoreAudioOnExit = true,
             },
             states);
 
@@ -252,13 +513,36 @@ public sealed class AutomationEngineTests
                 DiscordExecutablePath = string.Empty,
                 DiscordApiBaseUrl = string.Empty,
                 TargetAudioEndpointId = "headset",
+                RestoreAudioOnExit = true,
             },
             states: []);
+
+        /// <summary>
+        /// 기본 구성입니다. 자동 복원이 꺼져 있고 Discord 연동은 켜져 있어,
+        /// 두 기능이 서로 독립임을 확인할 수 있습니다.
+        /// </summary>
+        public static Harness CreateWithoutRestore(params DiscordVoiceState[] states) => new(
+            new AutomationSettings
+            {
+                WatchProcessName = "game",
+                LaunchExecutablePath = "game.exe",
+                UseDiscordIntegration = true,
+                DiscordProcessName = "discord",
+                DiscordExecutablePath = "discord.exe",
+                TargetAudioEndpointId = "headset",
+                DiscordApiBaseUrl = "https://example.invalid",
+                RestoreAudioOnExit = false,
+                DeferRestoreWhileDiscordInVoice = true,
+            },
+            states);
     }
 }
 
 internal sealed class FakeAudioService : IAudioEndpointService
 {
+    /// <summary>장치 제거 직후처럼 전환 호출 자체가 실패하는 상황을 재현합니다.</summary>
+    public bool ThrowOnSet { get; set; }
+
     public string? DefaultId { get; set; } = "speaker";
     public IReadOnlyList<AudioEndpoint> Endpoints { get; set; } =
     [
@@ -276,6 +560,10 @@ internal sealed class FakeAudioService : IAudioEndpointService
 
     public Task SetDefaultOutputAsync(string endpointId, CancellationToken cancellationToken)
     {
+        if (ThrowOnSet)
+        {
+            throw new InvalidOperationException("오디오 장치 전환 실패 테스트");
+        }
         SetCalls.Add(endpointId);
         DefaultId = endpointId;
         return Task.CompletedTask;
@@ -288,11 +576,19 @@ internal sealed class FakeProcessService : IProcessService
     public List<string> StartedPaths { get; } = [];
     public List<string> BroughtToFront { get; } = [];
 
+    /// <summary>실행 파일이 옮겨졌거나 UAC를 취소한 경우처럼 시작이 실패하는 상황입니다.</summary>
+    public bool FailNextStart { get; set; }
+
     public Task<bool> IsRunningAsync(string processName, CancellationToken cancellationToken) =>
         Task.FromResult(Running.Contains(processName));
 
     public Task StartAsync(string executablePath, CancellationToken cancellationToken)
     {
+        if (FailNextStart)
+        {
+            FailNextStart = false;
+            throw new InvalidOperationException("실행 파일을 시작할 수 없습니다 (테스트).");
+        }
         StartedPaths.Add(executablePath);
         Running.Add(Path.GetFileNameWithoutExtension(executablePath));
         return Task.CompletedTask;
@@ -380,12 +676,19 @@ internal sealed class FakeHotkeyService : IHotkeyService
 internal sealed class FakeProcessMonitor : IProcessMonitor
 {
     public bool Started { get; private set; }
+
+    /// <summary>감시 대상이 이미 실행 중이어서 감시 시작과 동시에 트리거되는 상황입니다.</summary>
+    public bool RaiseStartedOnStart { get; set; }
+
     public event Func<Task>? ProcessStarted;
     public event Func<Task>? ProcessExited;
-    public Task StartAsync(string processName, TimeSpan interval, CancellationToken cancellationToken)
+    public async Task StartAsync(string processName, TimeSpan interval, CancellationToken cancellationToken)
     {
         Started = true;
-        return Task.CompletedTask;
+        if (RaiseStartedOnStart)
+        {
+            await RaiseStartedAsync();
+        }
     }
     public Task StopAsync() => Task.CompletedTask;
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
