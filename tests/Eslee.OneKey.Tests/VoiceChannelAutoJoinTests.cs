@@ -302,16 +302,34 @@ public sealed class DiscordRpcTokenTests
 
 internal sealed class FakeVoiceChannelClient : IDiscordVoiceChannelClient
 {
+    private readonly Queue<DiscordRpcConnection> _connectionResults = new();
+
     public DiscordRpcConnection Connection { get; set; } = new(DiscordRpcStatus.Connected);
     public string? CurrentChannelId { get; set; }
     public bool Connected { get; private set; }
     public bool ThrowOnSelect { get; set; }
     public List<string> SelectedChannels { get; } = [];
 
-    public Task<DiscordRpcConnection> ConnectAsync(CancellationToken cancellationToken)
+    /// <summary>연결 시도 횟수입니다. 재시도가 몇 번 일어났는지 확인합니다.</summary>
+    public int ConnectAttempts { get; private set; }
+
+    /// <summary>설정하면 ConnectAsync가 이 신호를 기다립니다(비차단 검증용).</summary>
+    public TaskCompletionSource? ConnectGate { get; set; }
+
+    /// <summary>앞에서부터 차례로 돌려줄 연결 결과입니다. 비면 Connection을 씁니다.</summary>
+    public void EnqueueConnection(DiscordRpcConnection connection) =>
+        _connectionResults.Enqueue(connection);
+
+    public async Task<DiscordRpcConnection> ConnectAsync(CancellationToken cancellationToken)
     {
-        Connected = Connection.Status == DiscordRpcStatus.Connected;
-        return Task.FromResult(Connection);
+        ConnectAttempts++;
+        if (ConnectGate is not null)
+        {
+            await ConnectGate.Task.WaitAsync(cancellationToken);
+        }
+        var connection = _connectionResults.Count > 0 ? _connectionResults.Dequeue() : Connection;
+        Connected = connection.Status == DiscordRpcStatus.Connected;
+        return connection;
     }
 
     public Task<string?> GetSelectedVoiceChannelIdAsync(CancellationToken cancellationToken) =>

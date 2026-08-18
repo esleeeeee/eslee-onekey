@@ -1,6 +1,6 @@
 namespace Eslee.OneKey.Core;
 
-public sealed class AutomationEngine
+public sealed class AutomationEngine : IAsyncDisposable
 {
     private static readonly HashSet<AutomationState> BusyStates =
     [
@@ -19,6 +19,18 @@ public sealed class AutomationEngine
     private readonly IAppLogger _logger;
     private readonly VoiceChannelAutoJoin? _voiceChannelAutoJoin;
     private readonly SemaphoreSlim _gate = new(1, 1);
+
+    /// <summary>
+    /// Discord는 직전 RPC 연결을 닫은 뒤 20초 남짓 새 HANDSHAKE를 받지 않고, 드물게
+    /// 그보다 오래 걸린다. 자동화 시작을 붙잡지 않으려면 입장은 백그라운드에서
+    /// 재시도해야 하며, 그 재시도에는 분명한 상한이 필요하다.
+    /// </summary>
+    private static readonly TimeSpan VoiceJoinRetryDelay = TimeSpan.FromSeconds(5);
+    private static readonly TimeSpan VoiceJoinRetryBudget = TimeSpan.FromMinutes(2);
+    private const int VoiceJoinMaxAttempts = 5;
+
+    private CancellationTokenSource? _voiceJoinCancellation;
+    private Task? _voiceJoinTask;
     private string? _originalAudioEndpointId;
     private string? _managedAudioEndpointId;
 
@@ -118,7 +130,9 @@ public sealed class AutomationEngine
 
             await EnsureLaunchTargetRunningAsync(trigger, cancellationToken);
             await EnsureDiscordRunningAsync(cancellationToken);
-            await TryJoinVoiceChannelAsync(cancellationToken);
+            // 음성채널 입장은 Discord 재연결을 기다릴 수 있으므로 자동화 시작을
+            // 붙잡지 않는다. 실행 파일 시작과 오디오 전환은 이미 끝난 상태다.
+            StartVoiceChannelJoin(cancellationToken);
 
             SetState(AutomationState.Active);
             await SaveSessionAsync(cancellationToken);
@@ -346,28 +360,125 @@ public sealed class AutomationEngine
     }
 
     /// <summary>
-    /// 음성채널 자동 입장은 부가 기능이므로 어떤 실패도 자동화 시작을 실패시키지
-    /// 않습니다. 실행 파일 시작과 오디오 전환은 이미 끝난 뒤에 호출됩니다.
+    /// 음성채널 입장을 백그라운드에서 시작합니다. Discord는 직전 RPC 연결을 닫은 뒤
+    /// 한동안 새 연결을 받지 않으므로, 여기서 기다리면 자동화 시작 자체가 늦어집니다.
+    /// 이전 세션의 재시도가 남지 않도록 새로 시작할 때마다 앞의 작업을 취소합니다.
     /// </summary>
-    private async Task TryJoinVoiceChannelAsync(CancellationToken cancellationToken)
+    private void StartVoiceChannelJoin(CancellationToken cancellationToken)
     {
         if (_voiceChannelAutoJoin is null)
         {
             return;
         }
 
+        CancelPendingVoiceJoin();
+        var source = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
+        _voiceJoinCancellation = source;
+        _voiceJoinTask = RunVoiceChannelJoinAsync(source);
+    }
+
+    /// <summary>
+    /// 연결이 열릴 때까지 제한된 횟수와 시간 안에서만 다시 시도합니다. 어떤 실패도
+    /// 자동화를 실패시키지 않고 마지막 오류로만 남습니다.
+    /// </summary>
+    private async Task RunVoiceChannelJoinAsync(CancellationTokenSource source)
+    {
+        var token = source.Token;
         try
         {
-            var result = await _voiceChannelAutoJoin.EnsureJoinedAsync(_settings, cancellationToken);
-            if (!result.IsSuccess)
+            var deadline = _clock.UtcNow + VoiceJoinRetryBudget;
+            for (var attempt = 1; attempt <= VoiceJoinMaxAttempts; attempt++)
             {
-                LastError = result.Message ?? "Discord 음성채널 자동 입장에 실패했습니다.";
+                token.ThrowIfCancellationRequested();
+                var retryable = await TryJoinVoiceChannelOnceAsync(attempt, token);
+                if (!retryable)
+                {
+                    return;
+                }
+
+                if (attempt == VoiceJoinMaxAttempts || _clock.UtcNow + VoiceJoinRetryDelay >= deadline)
+                {
+                    _logger.Warning(
+                        "voice-join-gave-up",
+                        $"음성채널 자동 입장을 {attempt}회 시도 후 중단했습니다.");
+                    return;
+                }
+
+                await _clock.DelayAsync(VoiceJoinRetryDelay, token);
             }
         }
-        catch (Exception exception) when (exception is not OperationCanceledException)
+        catch (OperationCanceledException)
+        {
+            // 새 자동화 세션이 시작됐거나 앱이 종료 중입니다. 조용히 끝냅니다.
+        }
+        finally
+        {
+            source.Dispose();
+        }
+    }
+
+    /// <summary>한 번 시도하고, 다시 시도할 가치가 있으면 true를 돌려줍니다.</summary>
+    private async Task<bool> TryJoinVoiceChannelOnceAsync(int attempt, CancellationToken cancellationToken)
+    {
+        try
+        {
+            var result = await _voiceChannelAutoJoin!.EnsureJoinedAsync(_settings, cancellationToken);
+            if (result.IsSuccess)
+            {
+                // 이미 대상 채널이거나 다른 채널에 있어 건너뛴 경우도 여기서 끝납니다.
+                return false;
+            }
+
+            LastError = result.Message ?? "Discord 음성채널 자동 입장에 실패했습니다.";
+            RaiseStateChanged();
+
+            // 설정·인증 문제는 다시 시도해도 같은 결과이므로 즉시 멈춥니다.
+            return result.Outcome == VoiceJoinOutcome.DiscordUnavailable;
+        }
+        catch (OperationCanceledException)
+        {
+            throw;
+        }
+        catch (Exception exception)
         {
             LastError = "Discord 음성채널 자동 입장에 실패했습니다. 다른 자동화 동작은 유지합니다.";
-            _logger.Error("voice-join-failed", exception, LastError);
+            _logger.Error("voice-join-failed", exception, $"음성채널 입장 {attempt}회차 실패");
+            RaiseStateChanged();
+            return true;
+        }
+    }
+
+    private void CancelPendingVoiceJoin()
+    {
+        try
+        {
+            _voiceJoinCancellation?.Cancel();
+        }
+        catch (ObjectDisposedException)
+        {
+            // 이미 끝난 재시도입니다.
+        }
+        _voiceJoinCancellation = null;
+    }
+
+    /// <summary>진행 중인 음성채널 입장 재시도가 끝날 때까지 기다립니다(진단·시험용).</summary>
+    public Task WaitForVoiceChannelJoinAsync() => _voiceJoinTask ?? Task.CompletedTask;
+
+    /// <summary>앱 종료 시 남은 재시도를 정리합니다.</summary>
+    public async ValueTask DisposeAsync()
+    {
+        CancelPendingVoiceJoin();
+        if (_voiceJoinTask is not null)
+        {
+            try
+            {
+                await _voiceJoinTask;
+            }
+            catch (OperationCanceledException)
+            {
+                // 종료 중 취소는 정상입니다.
+            }
+            _voiceJoinTask = null;
         }
     }
 
@@ -547,6 +658,8 @@ public sealed class AutomationEngine
     private void SetState(AutomationState state)
     {
         State = state;
-        StateChanged?.Invoke(this, EventArgs.Empty);
+        RaiseStateChanged();
     }
+
+    private void RaiseStateChanged() => StateChanged?.Invoke(this, EventArgs.Empty);
 }
