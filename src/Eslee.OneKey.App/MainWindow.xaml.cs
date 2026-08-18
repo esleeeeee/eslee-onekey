@@ -221,12 +221,17 @@ public partial class MainWindow : Window
         }
         _httpClient?.Dispose();
         _httpClient = null;
+        if (_engine is not null)
+        {
+            // 이전 세션의 음성채널 재시도가 새 세션에 남지 않게 한다.
+            await _engine.DisposeAsync();
+            _engine = null;
+        }
         if (_rpcVoiceClient is not null)
         {
             await _rpcVoiceClient.DisposeAsync();
             _rpcVoiceClient = null;
         }
-        _engine = null;
 
         if (!_automation.Enabled ||
             _sessionStore is null ||
@@ -781,6 +786,11 @@ public partial class MainWindow : Window
         }
         _httpClient?.Dispose();
         _httpClient = null;
+        if (_engine is not null)
+        {
+            await _engine.DisposeAsync();
+            _engine = null;
+        }
         if (_rpcVoiceClient is not null)
         {
             await _rpcVoiceClient.DisposeAsync();
