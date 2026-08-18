@@ -39,6 +39,38 @@ public sealed class WindowsProcessService : IProcessService
         return Task.CompletedTask;
     }
 
+    /// <summary>
+    /// 종료할 때 상태 파일을 다시 쓰는 런처를 위해, 먼저 창을 닫도록
+    /// 요청하고 응답이 없을 때만 강제 종료합니다.
+    /// </summary>
+    public async Task StopAsync(string processName, CancellationToken cancellationToken)
+    {
+        foreach (var process in Process.GetProcessesByName(NormalizeProcessName(processName)))
+        {
+            using (process)
+            {
+                try
+                {
+                    if (process.MainWindowHandle != IntPtr.Zero)
+                    {
+                        process.CloseMainWindow();
+                        if (process.WaitForExit(3000))
+                        {
+                            continue;
+                        }
+                    }
+                    process.Kill(entireProcessTree: true);
+                    await process.WaitForExitAsync(cancellationToken);
+                }
+                catch (Exception exception) when (exception is InvalidOperationException
+                    or System.ComponentModel.Win32Exception)
+                {
+                    // 이미 종료된 프로세스입니다.
+                }
+            }
+        }
+    }
+
     public Task<bool> BringToFrontAsync(string processName, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();

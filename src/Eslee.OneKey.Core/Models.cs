@@ -91,6 +91,12 @@ public sealed record AppSettings
     public int SchemaVersion { get; init; } = 4;
     public bool StartWithWindows { get; init; }
     public List<AutomationSettings> Automations { get; init; } = [new()];
+
+    /// <summary>
+    /// 계정 프로필은 자동화와 분리해 둡니다. 자동화 규칙이 늘어나도 같은 프로필을
+    /// 재사용할 수 있고, 특정 게임에 묶이지 않습니다.
+    /// </summary>
+    public List<GameAccountProfile> AccountProfiles { get; init; } = [];
 }
 
 public sealed record AutomationSession

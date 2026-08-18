@@ -12,6 +12,9 @@ public interface IProcessService
     Task<bool> IsRunningAsync(string processName, CancellationToken cancellationToken);
     Task StartAsync(string executablePath, CancellationToken cancellationToken);
     Task<bool> BringToFrontAsync(string processName, CancellationToken cancellationToken);
+
+    /// <summary>이름이 같은 프로세스를 닫습니다. 이미 없으면 아무 일도 하지 않습니다.</summary>
+    Task StopAsync(string processName, CancellationToken cancellationToken);
 }
 
 public interface IDiscordVoiceStatusClient
