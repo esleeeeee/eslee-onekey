@@ -31,6 +31,8 @@ public sealed class AutomationEngine : IAsyncDisposable
 
     private CancellationTokenSource? _voiceJoinCancellation;
     private Task? _voiceJoinTask;
+    private string? _voiceJoinLastError;
+    private bool _disposed;
     private string? _originalAudioEndpointId;
     private string? _managedAudioEndpointId;
 
@@ -140,6 +142,7 @@ public sealed class AutomationEngine : IAsyncDisposable
         }
         catch (Exception exception) when (exception is not OperationCanceledException)
         {
+            CancelPendingVoiceJoin();
             LastError = exception.Message;
             _logger.Error("automation-start-failed", exception, "자동화 시작에 실패했습니다.");
             await RestoreAfterFailedStartAsync(cancellationToken);
@@ -215,6 +218,7 @@ public sealed class AutomationEngine : IAsyncDisposable
         await _gate.WaitAsync(cancellationToken);
         try
         {
+            CancelPendingVoiceJoin();
             if (string.IsNullOrWhiteSpace(_originalAudioEndpointId))
             {
                 LastError = "복원할 원래 오디오 장치가 없습니다.";
@@ -372,6 +376,11 @@ public sealed class AutomationEngine : IAsyncDisposable
         }
 
         CancelPendingVoiceJoin();
+        if (_disposed)
+        {
+            return;
+        }
+
         var source = CancellationTokenSource.CreateLinkedTokenSource(cancellationToken);
         _voiceJoinCancellation = source;
         _voiceJoinTask = RunVoiceChannelJoinAsync(source);
@@ -426,11 +435,11 @@ public sealed class AutomationEngine : IAsyncDisposable
             if (result.IsSuccess)
             {
                 // 이미 대상 채널이거나 다른 채널에 있어 건너뛴 경우도 여기서 끝납니다.
+                ClearVoiceJoinError();
                 return false;
             }
 
-            LastError = result.Message ?? "Discord 음성채널 자동 입장에 실패했습니다.";
-            RaiseStateChanged();
+            SetVoiceJoinError(result.Message ?? "Discord 음성채널 자동 입장에 실패했습니다.");
 
             // 설정·인증 문제는 다시 시도해도 같은 결과이므로 즉시 멈춥니다.
             return result.Outcome == VoiceJoinOutcome.DiscordUnavailable;
@@ -441,11 +450,36 @@ public sealed class AutomationEngine : IAsyncDisposable
         }
         catch (Exception exception)
         {
-            LastError = "Discord 음성채널 자동 입장에 실패했습니다. 다른 자동화 동작은 유지합니다.";
             _logger.Error("voice-join-failed", exception, $"음성채널 입장 {attempt}회차 실패");
-            RaiseStateChanged();
+            SetVoiceJoinError("Discord 음성채널 자동 입장에 실패했습니다. 다른 자동화 동작은 유지합니다.");
             return true;
         }
+    }
+
+    /// <summary>
+    /// 입장 오류는 부가 기능의 오류이므로, 나중에 입장에 성공하면 되돌립니다.
+    /// 자동화 본체가 남긴 오류 문구는 건드리지 않습니다.
+    /// </summary>
+    private void SetVoiceJoinError(string message)
+    {
+        LastError = message;
+        _voiceJoinLastError = message;
+        RaiseStateChanged();
+    }
+
+    private void ClearVoiceJoinError()
+    {
+        if (_voiceJoinLastError is null)
+        {
+            return;
+        }
+
+        if (LastError == _voiceJoinLastError)
+        {
+            LastError = null;
+            RaiseStateChanged();
+        }
+        _voiceJoinLastError = null;
     }
 
     private void CancelPendingVoiceJoin()
@@ -467,18 +501,21 @@ public sealed class AutomationEngine : IAsyncDisposable
     /// <summary>앱 종료 시 남은 재시도를 정리합니다.</summary>
     public async ValueTask DisposeAsync()
     {
+        _disposed = true;
         CancelPendingVoiceJoin();
-        if (_voiceJoinTask is not null)
+        var pending = _voiceJoinTask;
+        _voiceJoinTask = null;
+        if (pending is not null)
         {
             try
             {
-                await _voiceJoinTask;
+                await pending;
             }
-            catch (OperationCanceledException)
+            catch (Exception)
             {
-                // 종료 중 취소는 정상입니다.
+                // 정리 경로는 무엇이 실패하든 계속 진행해야 합니다. 재시도 태스크의
+                // 예외가 앱 종료를 깨뜨리지 않도록 여기서 흡수합니다.
             }
-            _voiceJoinTask = null;
         }
     }
 
@@ -632,6 +669,8 @@ public sealed class AutomationEngine : IAsyncDisposable
         {
             LastError = null;
         }
+        // 끝난 세션이 뒤늦게 사용자를 음성채널에 밀어 넣지 않도록 재시도를 멈춘다.
+        CancelPendingVoiceJoin();
         SetState(AutomationState.Completed);
         if (keepRestoreTarget)
         {
