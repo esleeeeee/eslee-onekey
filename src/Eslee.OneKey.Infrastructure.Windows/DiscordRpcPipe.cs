@@ -28,6 +28,14 @@ public sealed class DiscordRpcPipe : IAsyncDisposable
     /// <summary>파이프가 열린 채 응답하지 않는 경우를 끊는 프레임 단위 기본 시한입니다.</summary>
     public static readonly TimeSpan DefaultFrameTimeout = TimeSpan.FromSeconds(10);
 
+    /// <summary>
+    /// HANDSHAKE 응답 시한입니다. Discord는 연결을 수락할 준비가 되면 즉시(수백 ms)
+    /// READY를 보내지만, 직전 RPC 연결을 닫은 직후에는 20초 가까이 응답하지 않습니다.
+    /// 그동안은 파이프 연결만 수락되고 프레임이 오지 않으므로, 시한을 짧게 잡아
+    /// 같은 재시도 예산으로 더 자주 두드려야 연결이 열리는 순간을 잡을 수 있습니다.
+    /// </summary>
+    public static readonly TimeSpan HandshakeTimeout = TimeSpan.FromSeconds(2);
+
     private NamedPipeClientStream? _pipe;
 
     public bool IsConnected => _pipe is { IsConnected: true };
@@ -68,7 +76,7 @@ public sealed class DiscordRpcPipe : IAsyncDisposable
                 Handshake,
                 new { v = 1, client_id = clientId },
                 cancellationToken);
-            var (opcode, payload) = await ReceiveAsync(cancellationToken);
+            var (opcode, payload) = await ReceiveAsync(HandshakeTimeout, cancellationToken);
             using (payload)
             {
                 if (opcode == Frame && payload.RootElement.TryGetProperty("evt", out var evt) &&
