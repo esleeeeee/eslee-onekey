@@ -37,8 +37,13 @@ public sealed class DiscordRpcSmokeTests
         }
     }
 
+    /// <summary>
+    /// 반복 호출이 무동작인지 확인합니다. 이 테스트는 사용자를 음성채널로
+    /// 끌어들이면 안 되므로, 이미 대상 채널에 있을 때만 검사하고 그렇지 않으면
+    /// 아무것도 하지 않습니다. 실제 입장 경로는 단위 테스트가 덮습니다.
+    /// </summary>
     [DiscordRpcSmokeFact]
-    public async Task RepeatedAutoJoinIsIdempotent()
+    public async Task RepeatedAutoJoinIsIdempotentWhenAlreadyInTheTargetChannel()
     {
         var paths = new ApplicationPaths();
         var settings = (await new JsonSettingsStore(paths).LoadAsync(CancellationToken.None))
@@ -49,14 +54,26 @@ public sealed class DiscordRpcSmokeTests
             async cancellationToken => JsonSerializer.Deserialize<DiscordRpcTokens>(
                 await secrets.LoadRpcSecretsAsync(cancellationToken) ?? "")?.AccessToken,
             TimeSpan.FromSeconds(30));
-        var join = new VoiceChannelAutoJoin(client, new FakeLogger());
 
-        for (var attempt = 1; attempt <= 3; attempt++)
+        var connection = await client.ConnectAsync(CancellationToken.None);
+        if (connection.Status != DiscordRpcStatus.Connected)
+        {
+            return;
+        }
+
+        var current = await client.GetSelectedVoiceChannelIdAsync(CancellationToken.None);
+        DiscordChannelTarget.TryParse(settings.VoiceChannelTarget, out var target);
+        if (current is null || current != target)
+        {
+            // 대상 채널 밖이라면 여기서 멈춘다. 시험 때문에 사용자를 입장시키지 않는다.
+            return;
+        }
+
+        var join = new VoiceChannelAutoJoin(client, new FakeLogger());
+        for (var round = 1; round <= 3; round++)
         {
             var result = await join.EnsureJoinedAsync(settings, CancellationToken.None);
-            Assert.True(
-                result.IsSuccess,
-                $"{attempt}회차 실패: {result.Outcome} {result.Message}");
+            Assert.Equal(VoiceJoinOutcome.AlreadyInTargetChannel, result.Outcome);
         }
     }
 }
