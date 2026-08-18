@@ -69,6 +69,18 @@ public sealed record AutomationSettings
     /// </summary>
     public bool RestoreAudioOnExit { get; init; }
 
+    /// <summary>
+    /// 자동화 시작 시 지정한 Discord 음성채널에 자동 입장할지 여부입니다.
+    /// Discord 연동과 별개로 켜야 하며 기본값은 꺼짐입니다.
+    /// </summary>
+    public bool AutoJoinVoiceChannel { get; init; }
+
+    /// <summary>음성채널 링크 또는 Channel ID입니다. 비밀값이 아닙니다.</summary>
+    public string VoiceChannelTarget { get; init; } = string.Empty;
+
+    /// <summary>RPC용 Discord 애플리케이션 Client ID입니다. 공개 값이라 설정에 보관합니다.</summary>
+    public string DiscordRpcClientId { get; init; } = string.Empty;
+
     public bool DeferRestoreWhileDiscordInVoice { get; init; } = true;
     public TimeSpan ProcessPollInterval { get; init; } = TimeSpan.FromSeconds(1);
     public TimeSpan RestorePollInterval { get; init; } = TimeSpan.FromSeconds(5);
@@ -76,7 +88,7 @@ public sealed record AutomationSettings
 
 public sealed record AppSettings
 {
-    public int SchemaVersion { get; init; } = 3;
+    public int SchemaVersion { get; init; } = 4;
     public bool StartWithWindows { get; init; }
     public List<AutomationSettings> Automations { get; init; } = [new()];
 }

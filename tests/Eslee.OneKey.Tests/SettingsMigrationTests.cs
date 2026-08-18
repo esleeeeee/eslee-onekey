@@ -205,6 +205,108 @@ public sealed class SettingsMigrationTests
     }
 
     [Fact]
+    public async Task V3SettingsKeepEveryValueAndDefaultAutoJoinOff()
+    {
+        // v3 사용자 설정(자동 복원 옵션까지 있는 상태)에서 v4로 올라갈 때
+        // 새 음성채널 기능만 꺼진 채 추가되고 나머지는 그대로여야 한다.
+        var json = V2SettingsJson
+            .Replace("\"schemaVersion\": 2", "\"schemaVersion\": 3")
+            .Replace(
+                "\"deferRestoreWhileDiscordInVoice\": true",
+                "\"restoreAudioOnExit\": true,\n      \"deferRestoreWhileDiscordInVoice\": true");
+
+        var settings = await WithStoreAsync(json, store => store.LoadAsync(CancellationToken.None));
+
+        Assert.Equal(SettingsMigration.CurrentSchemaVersion, settings.SchemaVersion);
+        var automation = Assert.Single(settings.Automations);
+        Assert.Equal("라이엇 클라이언트", automation.Name);
+        Assert.Equal("VALORANT", automation.WatchProcessName);
+        Assert.Equal(@"C:\Riot Games\Riot Client\RiotClientServices.exe", automation.LaunchExecutablePath);
+        Assert.True(automation.UseDiscordIntegration);
+        Assert.Equal("https://bot.example.invalid", automation.DiscordApiBaseUrl);
+        Assert.True(automation.RestoreAudioOnExit);
+        Assert.True(automation.DeferRestoreWhileDiscordInVoice);
+        Assert.Equal(
+            "{0.0.0.00000000}.{11111111-2222-3333-4444-555555555555}",
+            automation.TargetAudioEndpointId);
+
+        // v4 신규 항목은 전부 꺼짐/빈 값.
+        Assert.False(automation.AutoJoinVoiceChannel);
+        Assert.Equal(string.Empty, automation.VoiceChannelTarget);
+        Assert.Equal(string.Empty, automation.DiscordRpcClientId);
+    }
+
+    [Fact]
+    public async Task V1SettingsAlsoReachV4WithAutoJoinOff()
+    {
+        var settings = await WithStoreAsync(
+            V1SettingsJson,
+            store => store.LoadAsync(CancellationToken.None));
+
+        Assert.Equal(SettingsMigration.CurrentSchemaVersion, settings.SchemaVersion);
+        var automation = Assert.Single(settings.Automations);
+        Assert.False(automation.AutoJoinVoiceChannel);
+        Assert.Equal("VALORANT", automation.WatchProcessName);
+    }
+
+    [Fact]
+    public async Task ExplicitAutoJoinSettingsArePreserved()
+    {
+        var json = V2SettingsJson
+            .Replace("\"schemaVersion\": 2", "\"schemaVersion\": 4")
+            .Replace(
+                "\"deferRestoreWhileDiscordInVoice\": true",
+                "\"autoJoinVoiceChannel\": true,\n      " +
+                "\"voiceChannelTarget\": \"222222222222222222\",\n      " +
+                "\"discordRpcClientId\": \"123456789012345678\",\n      " +
+                "\"deferRestoreWhileDiscordInVoice\": true");
+
+        var settings = await WithStoreAsync(json, store => store.LoadAsync(CancellationToken.None));
+
+        var automation = Assert.Single(settings.Automations);
+        Assert.True(automation.AutoJoinVoiceChannel);
+        Assert.Equal("222222222222222222", automation.VoiceChannelTarget);
+        Assert.Equal("123456789012345678", automation.DiscordRpcClientId);
+    }
+
+    [Fact]
+    public async Task SettingsFileNeverContainsRpcSecrets()
+    {
+        var root = Path.Combine(Path.GetTempPath(), "onekey-tests", Guid.NewGuid().ToString("N"));
+        var paths = new ApplicationPaths(root);
+        var store = new JsonSettingsStore(paths);
+        try
+        {
+            await store.SaveAsync(
+                new AppSettings
+                {
+                    Automations =
+                    [
+                        new AutomationSettings
+                        {
+                            AutoJoinVoiceChannel = true,
+                            VoiceChannelTarget = "222222222222222222",
+                            DiscordRpcClientId = "123456789012345678",
+                        },
+                    ],
+                },
+                CancellationToken.None);
+            var json = await File.ReadAllTextAsync(paths.SettingsFile);
+
+            Assert.DoesNotContain("secret", json, StringComparison.OrdinalIgnoreCase);
+            Assert.DoesNotContain("token", json, StringComparison.OrdinalIgnoreCase);
+            Assert.Contains("autoJoinVoiceChannel", json);
+        }
+        finally
+        {
+            if (Directory.Exists(root))
+            {
+                Directory.Delete(root, recursive: true);
+            }
+        }
+    }
+
+    [Fact]
     public async Task NonObjectJsonRootThrowsInsteadOfSilentlyResettingSettings()
     {
         await Assert.ThrowsAsync<System.Text.Json.JsonException>(() =>
