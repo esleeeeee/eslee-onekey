@@ -18,6 +18,7 @@ public sealed class AutomationEngine : IAsyncDisposable
     private readonly ISystemClock _clock;
     private readonly IAppLogger _logger;
     private readonly VoiceChannelAutoJoin? _voiceChannelAutoJoin;
+    private readonly IGameSessionService? _accountSessions;
     private readonly SemaphoreSlim _gate = new(1, 1);
 
     /// <summary>
@@ -50,9 +51,11 @@ public sealed class AutomationEngine : IAsyncDisposable
         ISessionStore sessions,
         ISystemClock clock,
         IAppLogger logger,
-        VoiceChannelAutoJoin? voiceChannelAutoJoin = null)
+        VoiceChannelAutoJoin? voiceChannelAutoJoin = null,
+        IGameSessionService? accountSessions = null)
     {
         _voiceChannelAutoJoin = voiceChannelAutoJoin;
+        _accountSessions = accountSessions;
         _settings = settings;
         _audio = audio;
         _processes = processes;
@@ -74,8 +77,17 @@ public sealed class AutomationEngine : IAsyncDisposable
     public bool KeptCurrentDevice { get; private set; }
     public event EventHandler? StateChanged;
 
+    public Task<AutomationStartResult> StartAsync(
+        AutomationTrigger trigger,
+        CancellationToken cancellationToken = default) =>
+        StartAsync(trigger, accountProfile: null, cancellationToken);
+
+    /// <param name="accountProfile">
+    /// 실행 전에 활성화할 계정 프로필입니다. null이면 계정을 건드리지 않습니다.
+    /// </param>
     public async Task<AutomationStartResult> StartAsync(
         AutomationTrigger trigger,
+        GameAccountProfile? accountProfile,
         CancellationToken cancellationToken = default)
     {
         await _gate.WaitAsync(cancellationToken);
@@ -98,6 +110,16 @@ public sealed class AutomationEngine : IAsyncDisposable
             LastError = null;
             KeptCurrentDevice = false;
             _logger.Info("automation-start", $"자동화를 시작합니다. trigger={trigger}");
+
+            // 계정 전환은 오디오나 실행 파일을 건드리기 전에 끝낸다. 전환할 수 없으면
+            // 아무것도 바꾸지 않은 상태로 멈추는 편이 안전하다.
+            var account = await ActivateAccountAsync(accountProfile, cancellationToken);
+            if (!account.CanContinue)
+            {
+                LastError = account.Message ?? "계정 전환에 실패했습니다.";
+                SetState(AutomationState.Failed);
+                return AutomationStartResult.Ignored(LastError);
+            }
 
             var currentEndpointId = await _audio.GetDefaultOutputIdAsync(cancellationToken);
             if (string.IsNullOrWhiteSpace(currentEndpointId))
@@ -361,6 +383,24 @@ public sealed class AutomationEngine : IAsyncDisposable
             LastError = "Discord 실행에 실패했습니다. 다른 자동화 동작은 유지합니다.";
             _logger.Error("discord-launch-failed", exception, LastError);
         }
+    }
+
+    /// <summary>
+    /// 지정한 계정 프로필의 로그인 세션을 활성화합니다. 프로필이 없거나 이미 그
+    /// 계정이면 아무것도 하지 않습니다.
+    /// </summary>
+    private async Task<GameSessionResult> ActivateAccountAsync(
+        GameAccountProfile? profile,
+        CancellationToken cancellationToken)
+    {
+        if (profile is null || _accountSessions is null)
+        {
+            return new GameSessionResult(GameSessionOutcome.NotRequested);
+        }
+
+        var result = await _accountSessions.ActivateAsync(profile, cancellationToken);
+        _logger.Info("account-activation", $"계정 전환 결과: {result.Outcome}");
+        return result;
     }
 
     /// <summary>

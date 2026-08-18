@@ -111,6 +111,69 @@ public sealed class DpapiSecretStore(ApplicationPaths paths) : ISecretStore
         return Task.CompletedTask;
     }
 
+    /// <summary>
+    /// 런처 로그인 세션은 쿠키라 비밀값과 같습니다. 프로필별로 DPAPI로만 보관하며
+    /// settings.json이나 로그에는 남기지 않습니다.
+    /// </summary>
+    public async Task SaveAccountSessionAsync(
+        Guid profileId,
+        string sessionContent,
+        CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(sessionContent))
+        {
+            throw new ArgumentException("세션 내용이 비어 있습니다.", nameof(sessionContent));
+        }
+
+        paths.EnsureDirectories();
+        Directory.CreateDirectory(Path.GetDirectoryName(AccountSessionFile(profileId))!);
+        var plainBytes = Encoding.UTF8.GetBytes(sessionContent);
+        try
+        {
+            var protectedBytes = Protect(plainBytes);
+            await File.WriteAllBytesAsync(AccountSessionFile(profileId), protectedBytes, cancellationToken);
+            Array.Clear(protectedBytes);
+        }
+        finally
+        {
+            Array.Clear(plainBytes);
+        }
+    }
+
+    public async Task<string?> LoadAccountSessionAsync(Guid profileId, CancellationToken cancellationToken)
+    {
+        var file = AccountSessionFile(profileId);
+        if (!File.Exists(file))
+        {
+            return null;
+        }
+
+        var protectedBytes = await File.ReadAllBytesAsync(file, cancellationToken);
+        var plainBytes = Unprotect(protectedBytes);
+        try
+        {
+            return Encoding.UTF8.GetString(plainBytes);
+        }
+        finally
+        {
+            Array.Clear(plainBytes);
+        }
+    }
+
+    public Task ClearAccountSessionAsync(Guid profileId, CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        var file = AccountSessionFile(profileId);
+        if (File.Exists(file))
+        {
+            File.Delete(file);
+        }
+        return Task.CompletedTask;
+    }
+
+    private string AccountSessionFile(Guid profileId) =>
+        Path.Combine(paths.Root, "account-sessions", $"{profileId:N}.dat");
+
     private static byte[] Protect(byte[] input) => Transform(input, protect: true);
     private static byte[] Unprotect(byte[] input) => Transform(input, protect: false);
 

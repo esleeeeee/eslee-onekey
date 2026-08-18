@@ -256,19 +256,41 @@ public partial class MainWindow : Window
             _sessionStore,
             new SystemClock(),
             _logger,
-            CreateVoiceChannelAutoJoin());
+            CreateVoiceChannelAutoJoin(),
+            CreateAccountSessionService());
         _engine.StateChanged += Engine_StateChanged;
 
         var windowHandle = new WindowInteropHelper(this).Handle;
         var hotkey = new WindowsGlobalHotkeyService(windowHandle);
         var monitor = new PollingProcessMonitor();
-        _coordinator = new AutomationCoordinator(_automation, _engine, hotkey, monitor);
+        _coordinator = new AutomationCoordinator(
+            _automation,
+            _engine,
+            hotkey,
+            monitor,
+            CreateAccountHotkeys(windowHandle));
         await _coordinator.InitializeAsync();
         if (_coordinator.LastError is not null)
         {
             _tray?.ShowBalloon("전역 단축키 등록 실패", _coordinator.LastError);
         }
     }
+
+    /// <summary>
+    /// 계정 프로필별 전역 단축키입니다. 프로필을 추가하면 단축키도 그만큼 늘어나며,
+    /// 어느 계정으로 자동화를 시작할지가 단축키로 결정됩니다.
+    /// </summary>
+    private IReadOnlyList<AutomationCoordinator.AccountHotkey> CreateAccountHotkeys(nint windowHandle) =>
+        _appSettings.AccountProfiles
+            .Select(profile => new AutomationCoordinator.AccountHotkey(
+                profile,
+                new WindowsGlobalHotkeyService(windowHandle)))
+            .ToArray();
+
+    private GameAccountSessionService? CreateAccountSessionService() =>
+        _secretStore is null || _logger is null
+            ? null
+            : new GameAccountSessionService(_paths, _secretStore, _processes, _logger);
 
     /// <summary>
     /// 음성채널 자동 입장은 Discord 연동과 자동 입장이 모두 켜져 있을 때만 구성합니다.

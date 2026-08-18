@@ -6,6 +6,7 @@ public sealed class AutomationCoordinator : IAsyncDisposable
     private readonly AutomationEngine _engine;
     private readonly IHotkeyService _hotkey;
     private readonly IProcessMonitor _processMonitor;
+    private readonly IReadOnlyList<AccountHotkey> _accountHotkeys;
     private CancellationTokenSource? _lifetime;
     private Task? _restoreTask;
 
@@ -13,13 +14,21 @@ public sealed class AutomationCoordinator : IAsyncDisposable
         AutomationSettings settings,
         AutomationEngine engine,
         IHotkeyService hotkey,
-        IProcessMonitor processMonitor)
+        IProcessMonitor processMonitor,
+        IReadOnlyList<AccountHotkey>? accountHotkeys = null)
     {
         _settings = settings;
         _engine = engine;
         _hotkey = hotkey;
         _processMonitor = processMonitor;
+        _accountHotkeys = accountHotkeys ?? [];
     }
+
+    /// <summary>
+    /// 계정별 단축키입니다. 같은 자동화를 시작하되 어떤 게임 계정으로 시작할지가
+    /// 다릅니다. 프로필을 늘리면 단축키도 그만큼 늘어납니다.
+    /// </summary>
+    public sealed record AccountHotkey(GameAccountProfile Profile, IHotkeyService Hotkey);
 
     public bool IsPaused { get; private set; }
     public string? LastError { get; private set; }
@@ -37,6 +46,20 @@ public sealed class AutomationCoordinator : IAsyncDisposable
             LastError = registration.Error ?? "전역 단축키 등록에 실패했습니다.";
         }
 
+        foreach (var account in _accountHotkeys)
+        {
+            var profile = account.Profile;
+            account.Hotkey.Pressed += () => HandleAccountHotkeyAsync(profile);
+            var accountRegistration = await account.Hotkey.RegisterAsync(
+                account.Profile.Hotkey,
+                cancellationToken);
+            if (!accountRegistration.Succeeded)
+            {
+                LastError = accountRegistration.Error
+                    ?? $"{account.Profile.Name} 단축키 등록에 실패했습니다.";
+            }
+        }
+
         // 감시 프로세스가 이미 실행 중이면 감시 시작이 곧바로 자동화를 트리거하므로,
         // 이전 세션 복구를 먼저 끝내 진행 중인 실행과 뒤엉키지 않게 한다.
         await _engine.RecoverStaleSessionAsync(cancellationToken);
@@ -51,6 +74,15 @@ public sealed class AutomationCoordinator : IAsyncDisposable
     }
 
     public void SetPaused(bool paused) => IsPaused = paused;
+
+    /// <summary>지정한 계정으로 자동화를 시작합니다.</summary>
+    public async Task HandleAccountHotkeyAsync(GameAccountProfile profile)
+    {
+        if (!IsPaused)
+        {
+            await _engine.StartAsync(AutomationTrigger.Hotkey, profile, LifetimeToken);
+        }
+    }
 
     public async Task HandleHotkeyAsync()
     {
@@ -98,6 +130,10 @@ public sealed class AutomationCoordinator : IAsyncDisposable
         _processMonitor.ProcessStarted -= HandleProcessStartedAsync;
         _processMonitor.ProcessExited -= HandleProcessExitedAsync;
         _hotkey.Unregister();
+        foreach (var account in _accountHotkeys)
+        {
+            account.Hotkey.Unregister();
+        }
         await _processMonitor.StopAsync();
         if (_restoreTask is not null)
         {
@@ -112,6 +148,10 @@ public sealed class AutomationCoordinator : IAsyncDisposable
         }
         await _processMonitor.DisposeAsync();
         await _hotkey.DisposeAsync();
+        foreach (var account in _accountHotkeys)
+        {
+            await account.Hotkey.DisposeAsync();
+        }
         _lifetime?.Dispose();
     }
 

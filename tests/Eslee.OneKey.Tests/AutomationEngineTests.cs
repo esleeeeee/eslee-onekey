@@ -599,6 +599,15 @@ internal sealed class FakeProcessService : IProcessService
         BroughtToFront.Add(processName);
         return Task.FromResult(true);
     }
+
+    public List<string> Stopped { get; } = [];
+
+    public Task StopAsync(string processName, CancellationToken cancellationToken)
+    {
+        Stopped.Add(processName);
+        Running.Remove(processName);
+        return Task.CompletedTask;
+    }
 }
 
 internal sealed class FakeVoiceClient : IDiscordVoiceStatusClient
