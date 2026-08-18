@@ -89,6 +89,12 @@
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="Auto" />
                             <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
+                            <RowDefinition Height="Auto" />
                         </Grid.RowDefinitions>
 
                         <TextBlock Text="자동화 이름" VerticalAlignment="Center" />
@@ -155,15 +161,44 @@
                                    Text="Token을 비워 두면 기존 DPAPI 보관값을 유지합니다. 일반 settings.json에는 저장되지 않습니다."
                                    Foreground="#69677A" TextWrapping="Wrap" Margin="6,0,0,8" />
 
-                        <TextBlock Grid.Row="14" Text="복원 정책" VerticalAlignment="Center" />
-                        <CheckBox x:Name="DeferRestoreCheck" Grid.Row="14" Grid.Column="1" Grid.ColumnSpan="2"
+                        <TextBlock Grid.Row="14" Grid.ColumnSpan="3" Text="음성채널 자동 입장 (선택)"
+                                   FontWeight="SemiBold" Margin="0,18,0,4" />
+
+                        <TextBlock Grid.Row="15" Text="사용" VerticalAlignment="Center" />
+                        <CheckBox x:Name="AutoJoinVoiceCheck" Grid.Row="15" Grid.Column="1" Grid.ColumnSpan="2"
+                                  Content="자동화 시작 시 지정한 음성채널에 입장 (다른 통화 중이면 건너뜀)" Margin="8"
+                                  IsEnabled="{Binding IsChecked, ElementName=UseDiscordCheck}" />
+
+                        <TextBlock Grid.Row="16" Text="음성채널 링크/ID" VerticalAlignment="Center" />
+                        <TextBox x:Name="VoiceChannelTargetText" Grid.Row="16" Grid.Column="1" Grid.ColumnSpan="2"
+                                 IsEnabled="{Binding IsChecked, ElementName=AutoJoinVoiceCheck}" />
+
+                        <TextBlock Grid.Row="17" Text="RPC Client ID" VerticalAlignment="Center" />
+                        <TextBox x:Name="RpcClientIdText" Grid.Row="17" Grid.Column="1"
+                                 IsEnabled="{Binding IsChecked, ElementName=AutoJoinVoiceCheck}" />
+                        <Button x:Name="ConnectRpcButton" Grid.Row="17" Grid.Column="2" Content="Discord 연결"
+                                Click="ConnectRpc_Click"
+                                IsEnabled="{Binding IsChecked, ElementName=AutoJoinVoiceCheck}" />
+
+                        <TextBlock Grid.Row="18" Text="RPC Client Secret" VerticalAlignment="Center" />
+                        <PasswordBox x:Name="RpcClientSecretPassword" Grid.Row="18" Grid.Column="1" Margin="4" Padding="7"
+                                     IsEnabled="{Binding IsChecked, ElementName=AutoJoinVoiceCheck}" />
+                        <TextBlock x:Name="RpcStatusText" Grid.Row="18" Grid.Column="2"
+                                   Text="미연결" VerticalAlignment="Center" Foreground="#69677A" />
+
+                        <TextBlock Grid.Row="19" Grid.Column="1" Grid.ColumnSpan="2"
+                                   Text="본인 Discord 애플리케이션을 만들고 Redirect URI에 http://localhost/onekey 를 등록하세요. Public Client를 켜면 Secret 없이 연결됩니다. Secret은 DPAPI에만 보관되며 settings.json에 저장되지 않습니다."
+                                   Foreground="#69677A" TextWrapping="Wrap" Margin="6,0,0,8" />
+
+                        <TextBlock Grid.Row="20" Text="복원 정책" VerticalAlignment="Center" />
+                        <CheckBox x:Name="DeferRestoreCheck" Grid.Row="20" Grid.Column="1" Grid.ColumnSpan="2"
                                   Content="Discord 통화 중이면 복원 보류 (자동 복원을 켠 경우에만 적용)" Margin="8" />
 
-                        <TextBlock Grid.Row="15" Text="Windows 시작" VerticalAlignment="Center" />
-                        <CheckBox x:Name="StartupCheck" Grid.Row="15" Grid.Column="1" Grid.ColumnSpan="2"
+                        <TextBlock Grid.Row="21" Text="Windows 시작" VerticalAlignment="Center" />
+                        <CheckBox x:Name="StartupCheck" Grid.Row="21" Grid.Column="1" Grid.ColumnSpan="2"
                                   Content="로그인 시 자동 실행" Margin="8" />
 
-                        <WrapPanel Grid.Row="16" Grid.Column="1" Grid.ColumnSpan="2" Margin="0,14,0,0">
+                        <WrapPanel Grid.Row="22" Grid.Column="1" Grid.ColumnSpan="2" Margin="0,14,0,0">
                             <Button x:Name="SaveSettingsButton" Content="설정 저장 및 적용" Click="SaveSettings_Click" Background="#6D5DFB" Foreground="White" />
                         </WrapPanel>
                     </Grid>

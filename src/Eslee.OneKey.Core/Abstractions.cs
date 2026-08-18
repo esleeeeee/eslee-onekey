@@ -19,6 +19,28 @@ public interface IDiscordVoiceStatusClient
     Task<DiscordVoiceCheck> CheckAsync(CancellationToken cancellationToken);
 }
 
+public enum DiscordRpcStatus
+{
+    Connected,
+    /// <summary>Discord 클라이언트가 없거나 준비되지 않았습니다.</summary>
+    Unavailable,
+    /// <summary>저장된 RPC 인증이 없거나 더 이상 유효하지 않습니다.</summary>
+    NotAuthorized,
+}
+
+public sealed record DiscordRpcConnection(DiscordRpcStatus Status, string? Error = null);
+
+/// <summary>
+/// 로컬 Discord 클라이언트의 음성채널을 공식 RPC로 제어합니다. 통화 상태 확인용
+/// <see cref="IDiscordVoiceStatusClient"/>(자체 봇 API)와는 별개의 경로입니다.
+/// </summary>
+public interface IDiscordVoiceChannelClient
+{
+    Task<DiscordRpcConnection> ConnectAsync(CancellationToken cancellationToken);
+    Task<string?> GetSelectedVoiceChannelIdAsync(CancellationToken cancellationToken);
+    Task SelectVoiceChannelAsync(string channelId, CancellationToken cancellationToken);
+}
+
 public interface ISessionStore
 {
     Task<AutomationSession?> LoadAsync(CancellationToken cancellationToken);
