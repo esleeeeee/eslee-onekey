@@ -184,3 +184,105 @@ public sealed class VoiceChannelRetryTests
         await engine.DisposeAsync();
     }
 }
+
+/// <summary>끝난 세션이 뒤늦게 입장하거나 오류 문구를 남기지 않는지 확인합니다.</summary>
+public sealed class VoiceChannelRetryLifetimeTests
+{
+    private const string TargetChannelId = "222222222222222222";
+
+    private static readonly DiscordRpcConnection Unavailable =
+        new(DiscordRpcStatus.Unavailable, "Discord 클라이언트에 연결하지 못했습니다.");
+
+    private static (AutomationEngine Engine, FakeVoiceChannelClient Client) CreateEngine(
+        FakeVoiceChannelClient client)
+    {
+        var logger = new FakeLogger();
+        var engine = new AutomationEngine(
+            new AutomationSettings
+            {
+                WatchProcessName = "game",
+                LaunchExecutablePath = "game.exe",
+                UseDiscordIntegration = true,
+                DiscordProcessName = "discord",
+                DiscordExecutablePath = "discord.exe",
+                TargetAudioEndpointId = "headset",
+                AutoJoinVoiceChannel = true,
+                VoiceChannelTarget = TargetChannelId,
+                DiscordRpcClientId = "123456789012345678",
+            },
+            new FakeAudioService(),
+            new FakeProcessService(),
+            new FakeVoiceClient([]),
+            new FakeSessionStore(),
+            new FakeClock(),
+            logger,
+            new VoiceChannelAutoJoin(client, logger));
+        return (engine, client);
+    }
+
+    [Fact]
+    public async Task EndingTheSessionStopsAPendingJoinRetry()
+    {
+        var gate = new TaskCompletionSource();
+        var (engine, client) = CreateEngine(new FakeVoiceChannelClient
+        {
+            ConnectGate = gate,
+            CurrentChannelId = null,
+        });
+        await engine.StartAsync(AutomationTrigger.Hotkey);
+
+        // 사용자가 자동화를 끝낸 뒤에 Discord가 열려도 입장하면 안 된다.
+        await engine.KeepCurrentAndStopAsync();
+        client.ConnectGate = null;
+        gate.SetResult();
+        await engine.WaitForVoiceChannelJoinAsync();
+
+        Assert.Empty(client.SelectedChannels);
+        await engine.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task SucceedingAfterARetryClearsTheEarlierErrorText()
+    {
+        var client = new FakeVoiceChannelClient { CurrentChannelId = null };
+        client.EnqueueConnection(Unavailable);
+        client.EnqueueConnection(new DiscordRpcConnection(DiscordRpcStatus.Connected));
+        var (engine, _) = CreateEngine(client);
+
+        await engine.StartAsync(AutomationTrigger.Hotkey);
+        await engine.WaitForVoiceChannelJoinAsync();
+
+        Assert.Equal([TargetChannelId], client.SelectedChannels);
+        Assert.Null(engine.LastError);
+        await engine.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task JoinErrorDoesNotSurviveTheSessionCompleting()
+    {
+        var client = new FakeVoiceChannelClient { Connection = Unavailable };
+        var (engine, _) = CreateEngine(client);
+        await engine.StartAsync(AutomationTrigger.Hotkey);
+        await engine.WaitForVoiceChannelJoinAsync();
+        Assert.NotNull(engine.LastError);
+
+        await engine.KeepCurrentAndStopAsync();
+
+        Assert.Null(engine.LastError);
+        await engine.DisposeAsync();
+    }
+
+    [Fact]
+    public async Task DisposedEngineDoesNotStartNewRetries()
+    {
+        var client = new FakeVoiceChannelClient { CurrentChannelId = null };
+        var (engine, _) = CreateEngine(client);
+
+        await engine.DisposeAsync();
+        await engine.StartAsync(AutomationTrigger.Hotkey);
+        await engine.WaitForVoiceChannelJoinAsync();
+
+        Assert.Equal(0, client.ConnectAttempts);
+        Assert.Empty(client.SelectedChannels);
+    }
+}

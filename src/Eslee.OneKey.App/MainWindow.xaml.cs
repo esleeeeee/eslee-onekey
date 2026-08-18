@@ -224,6 +224,7 @@ public partial class MainWindow : Window
         if (_engine is not null)
         {
             // 이전 세션의 음성채널 재시도가 새 세션에 남지 않게 한다.
+            _engine.StateChanged -= Engine_StateChanged;
             await _engine.DisposeAsync();
             _engine = null;
         }
@@ -788,6 +789,7 @@ public partial class MainWindow : Window
         _httpClient = null;
         if (_engine is not null)
         {
+            _engine.StateChanged -= Engine_StateChanged;
             await _engine.DisposeAsync();
             _engine = null;
         }
