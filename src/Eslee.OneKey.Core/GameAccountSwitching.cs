@@ -53,6 +53,17 @@ public sealed record GameSessionResult(GameSessionOutcome Outcome, string? Messa
             or GameSessionOutcome.Switched;
 }
 
+/// <summary>계정 프로필의 등록 상태입니다.</summary>
+public enum GameAccountProfileStatus
+{
+    /// <summary>아직 세션을 저장하지 않았습니다.</summary>
+    NotEnrolled,
+    /// <summary>사용할 수 있는 세션이 저장돼 있습니다.</summary>
+    Enrolled,
+    /// <summary>저장된 세션을 런처가 거부했습니다. 다시 등록해야 합니다.</summary>
+    NeedsReenrollment,
+}
+
 /// <summary>
 /// 런처의 로그인 세션을 프로필별로 보관하고 원하는 프로필로 활성화합니다.
 /// 구현은 게임 설치 파일이 아니라 사용자 데이터 폴더의 세션만 다룹니다.
@@ -69,4 +80,21 @@ public interface IGameSessionService
 
     /// <summary>이 프로필에 저장된 세션이 있는지 여부입니다.</summary>
     Task<bool> HasStoredSessionAsync(Guid profileId, CancellationToken cancellationToken);
+
+    /// <summary>등록 상태를 확인합니다. 거부된 세션은 재등록 필요로 표시됩니다.</summary>
+    Task<GameAccountProfileStatus> GetStatusAsync(
+        GameAccountProfile profile,
+        CancellationToken cancellationToken);
+
+    /// <summary>
+    /// 다음 계정을 등록할 수 있도록 로그인되지 않은 상태를 만듭니다. 런처의 로그아웃
+    /// 명령은 쓰지 않습니다. 로그아웃은 서버에서 refresh token을 폐기해 이미 등록해 둔
+    /// 다른 계정의 세션까지 무효로 만들기 때문입니다.
+    /// </summary>
+    Task<GameSessionResult> PrepareForNewSignInAsync(
+        GameAccountProfile profile,
+        CancellationToken cancellationToken);
+
+    /// <summary>저장된 세션을 지웁니다(프로필 삭제 시).</summary>
+    Task ForgetAsync(Guid profileId, CancellationToken cancellationToken);
 }
