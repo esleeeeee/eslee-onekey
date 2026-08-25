@@ -11,7 +11,6 @@ public sealed class AccountSwitchWhileActiveTests
     private static readonly GameAccountProfile Korea = new()
     {
         Name = "한국 계정",
-        Hotkey = new HotkeyGesture(true, true, true, false, "V"),
         SessionFilePath = @"C:\launcher\session.yaml",
     };
 

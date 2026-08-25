@@ -3,23 +3,34 @@ using Eslee.OneKey.Core;
 namespace Eslee.OneKey.Tests;
 
 /// <summary>
-/// 단축키마다 서로 다른 계정 프로필로 자동화가 시작되는지 확인합니다.
+/// 단축키는 자동화 규칙에만 있습니다. 규칙마다 다른 계정 프로필로 시작하는지 봅니다.
 /// </summary>
-public sealed class AccountHotkeyTests
+public sealed class AutomationRuleHotkeyTests
 {
     private static readonly GameAccountProfile Korea = new()
     {
         Name = "한국 계정",
-        Hotkey = new HotkeyGesture(true, true, true, false, "V"),
         SessionFilePath = @"C:\launcher\session.yaml",
     };
 
     private static readonly GameAccountProfile Asia = new()
     {
         Name = "아시아 계정",
-        Hotkey = new HotkeyGesture(true, true, true, false, "A"),
         SessionFilePath = @"C:\launcher\session.yaml",
     };
+
+    private static AutomationSettings Rule(string name, string key, Guid profileId) => new()
+    {
+        Name = name,
+        Hotkey = new HotkeyGesture(true, true, true, false, key),
+        AccountProfileId = profileId,
+        WatchProcessName = "game",
+        LaunchExecutablePath = "game.exe",
+        TargetAudioEndpointId = "headset",
+    };
+
+    private static readonly AutomationSettings KoreaRule = Rule("한국", "V", Korea.Id);
+    private static readonly AutomationSettings AsiaRule = Rule("아시아", "A", Asia.Id);
 
     private static (AutomationEngine Engine, FakeGameSessionService Sessions) CreateEngine()
     {
@@ -55,8 +66,8 @@ public sealed class AccountHotkeyTests
             new FakeHotkeyService(),
             new FakeProcessMonitor(),
             [
-                new AutomationCoordinator.AccountHotkey(Korea, korea),
-                new AutomationCoordinator.AccountHotkey(Asia, asia),
+                new AutomationCoordinator.AutomationRuleBinding(KoreaRule, korea, Korea),
+                new AutomationCoordinator.AutomationRuleBinding(AsiaRule, asia, Asia),
             ]);
         await coordinator.InitializeAsync();
 
@@ -80,7 +91,7 @@ public sealed class AccountHotkeyTests
             engine,
             new FakeHotkeyService(),
             new FakeProcessMonitor(),
-            [new AutomationCoordinator.AccountHotkey(Korea, korea)]);
+            [new AutomationCoordinator.AutomationRuleBinding(KoreaRule, korea, Korea)]);
         await coordinator.InitializeAsync();
         coordinator.SetPaused(true);
 
@@ -162,9 +173,10 @@ internal sealed class FakeGameSessionService : IGameSessionService
 }
 
 /// <summary>
-/// 자동화 기본 단축키와 계정 프로필 단축키가 겹치면 Windows가 중복 등록을 거부합니다.
+/// 단축키는 규칙에만 있으므로 같은 조합이 두 번 등록될 일이 없어야 합니다.
+/// 두 규칙이 같은 조합을 쓰면 Windows가 거부하기 전에 우리가 먼저 걸러 알립니다.
 /// </summary>
-public sealed class AccountHotkeyConflictTests
+public sealed class AutomationRuleHotkeyConflictTests
 {
     private static readonly HotkeyGesture Shared = new(true, true, true, false, "V");
 
@@ -177,52 +189,70 @@ public sealed class AccountHotkeyConflictTests
         new FakeClock(),
         new FakeLogger());
 
-    [Fact]
-    public async Task TheAccountHotkeyWinsWhenItMatchesTheAutomationHotkey()
+    private static AutomationSettings Rule(string name, HotkeyGesture hotkey) => new()
     {
-        var primary = new FakeHotkeyService();
-        var account = new FakeHotkeyService();
+        Name = name,
+        Hotkey = hotkey,
+        WatchProcessName = "game",
+    };
+
+    [Fact]
+    public async Task TwoRulesCannotClaimTheSameHotkey()
+    {
+        var first = new FakeHotkeyService();
+        var second = new FakeHotkeyService();
         await using var coordinator = new AutomationCoordinator(
-            new AutomationSettings { WatchProcessName = "game", Hotkey = Shared },
+            new AutomationSettings { WatchProcessName = "game" },
             CreateEngine(),
-            primary,
+            new FakeHotkeyService(),
             new FakeProcessMonitor(),
             [
-                new AutomationCoordinator.AccountHotkey(
-                    new GameAccountProfile { Name = "한국 계정", Hotkey = Shared },
-                    account),
+                new AutomationCoordinator.AutomationRuleBinding(Rule("한국", Shared), first),
+                new AutomationCoordinator.AutomationRuleBinding(Rule("아시아", Shared), second),
             ]);
 
         await coordinator.InitializeAsync();
 
-        Assert.False(primary.Registered);
-        Assert.True(account.Registered);
+        Assert.True(first.Registered);
+        Assert.False(second.Registered);
+        Assert.Contains("같은 단축키", coordinator.LastError);
+    }
+
+    [Fact]
+    public async Task DistinctRuleHotkeysAreAllRegistered()
+    {
+        var first = new FakeHotkeyService();
+        var second = new FakeHotkeyService();
+        await using var coordinator = new AutomationCoordinator(
+            new AutomationSettings { WatchProcessName = "game" },
+            CreateEngine(),
+            new FakeHotkeyService(),
+            new FakeProcessMonitor(),
+            [
+                new AutomationCoordinator.AutomationRuleBinding(Rule("한국", Shared), first),
+                new AutomationCoordinator.AutomationRuleBinding(
+                    Rule("아시아", new HotkeyGesture(true, true, true, false, "A")), second),
+            ]);
+
+        await coordinator.InitializeAsync();
+
+        Assert.True(first.Registered);
+        Assert.True(second.Registered);
         Assert.Null(coordinator.LastError);
     }
 
     [Fact]
-    public async Task ADistinctAutomationHotkeyIsStillRegistered()
+    public async Task TheStandaloneHotkeyIsUsedOnlyWhenThereAreNoRules()
     {
-        var primary = new FakeHotkeyService();
-        var account = new FakeHotkeyService();
+        var standalone = new FakeHotkeyService();
         await using var coordinator = new AutomationCoordinator(
-            new AutomationSettings
-            {
-                WatchProcessName = "game",
-                Hotkey = new HotkeyGesture(true, true, false, false, "G"),
-            },
+            new AutomationSettings { WatchProcessName = "game", Hotkey = Shared },
             CreateEngine(),
-            primary,
-            new FakeProcessMonitor(),
-            [
-                new AutomationCoordinator.AccountHotkey(
-                    new GameAccountProfile { Name = "한국 계정", Hotkey = Shared },
-                    account),
-            ]);
+            standalone,
+            new FakeProcessMonitor());
 
         await coordinator.InitializeAsync();
 
-        Assert.True(primary.Registered);
-        Assert.True(account.Registered);
+        Assert.True(standalone.Registered);
     }
 }

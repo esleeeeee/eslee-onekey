@@ -63,9 +63,20 @@
                 </Grid>
             </TabItem>
 
-            <TabItem Header="설정">
+            <TabItem Header="자동화">
                 <ScrollViewer VerticalScrollBarVisibility="Auto">
-                    <Grid Margin="24">
+                  <StackPanel Margin="24">
+                    <TextBlock Text="자동화 규칙" FontSize="18" FontWeight="SemiBold" />
+                    <TextBlock TextWrapping="Wrap" Foreground="#69677A" Margin="0,6,0,10"
+                               Text="단축키를 눌렀을 때 무엇을 실행할지 규칙 단위로 정합니다. 단축키는 규칙에만 있습니다. 같은 실행 환경에 계정만 다른 규칙을 만들면, 자동화가 도는 중에도 오디오와 통화를 그대로 둔 채 계정만 바뀝니다." />
+                    <StackPanel Orientation="Horizontal" Margin="0,0,0,14">
+                        <TextBlock Text="편집할 규칙" VerticalAlignment="Center" Width="190" />
+                        <ComboBox x:Name="AutomationRuleCombo" Width="260" DisplayMemberPath="Name"
+                                  SelectionChanged="AutomationRule_SelectionChanged" />
+                        <Button Content="규칙 추가" Click="AddAutomationRule_Click" />
+                        <Button Content="규칙 삭제" Click="DeleteAutomationRule_Click" />
+                    </StackPanel>
+                    <Grid>
                         <Grid.ColumnDefinitions>
                             <ColumnDefinition Width="190" />
                             <ColumnDefinition Width="*" />
@@ -194,14 +205,17 @@
                         <CheckBox x:Name="DeferRestoreCheck" Grid.Row="20" Grid.Column="1" Grid.ColumnSpan="2"
                                   Content="Discord 통화 중이면 복원 보류 (자동 복원을 켠 경우에만 적용)" Margin="8" />
 
-                        <TextBlock Grid.Row="21" Text="Windows 시작" VerticalAlignment="Center" />
-                        <CheckBox x:Name="StartupCheck" Grid.Row="21" Grid.Column="1" Grid.ColumnSpan="2"
-                                  Content="로그인 시 자동 실행" Margin="8" />
+                        <TextBlock Grid.Row="21" Text="사용할 계정 프로필" VerticalAlignment="Center" />
+                        <ComboBox x:Name="AccountProfileCombo" Grid.Row="21" Grid.Column="1"
+                                  DisplayMemberPath="Name" SelectedValuePath="Id" />
+                        <Button Grid.Row="21" Grid.Column="2" Content="계정 사용 안 함"
+                                Click="ClearAccountProfile_Click" />
 
                         <WrapPanel Grid.Row="22" Grid.Column="1" Grid.ColumnSpan="2" Margin="0,14,0,0">
-                            <Button x:Name="SaveSettingsButton" Content="설정 저장 및 적용" Click="SaveSettings_Click" Background="#6D5DFB" Foreground="White" />
+                            <Button x:Name="SaveSettingsButton" Content="자동화 저장 및 적용" Click="SaveSettings_Click" Background="#6D5DFB" Foreground="White" />
                         </WrapPanel>
                     </Grid>
+                  </StackPanel>
                 </ScrollViewer>
             </TabItem>
 
@@ -210,7 +224,7 @@
                     <StackPanel Margin="24">
                         <TextBlock Text="게임 계정 프로필" FontSize="18" FontWeight="SemiBold" />
                         <TextBlock TextWrapping="Wrap" Foreground="#69677A" Margin="0,6,0,4"
-                                   Text="단축키마다 다른 계정으로 자동화를 시작합니다. 아이디와 비밀번호는 저장하지 않고, 런처가 이미 보관하는 로그인 세션만 프로필별로 나눠 둡니다. 세션은 DPAPI로 암호화되어 설정 파일이나 로그에는 남지 않습니다." />
+                                   Text="여기서는 로그인 세션만 관리합니다. 어떤 단축키로 어떤 계정을 쓸지는 자동화 탭에서 규칙으로 정합니다. 아이디와 비밀번호는 저장하지 않고, 런처가 이미 보관하는 로그인 세션만 프로필별로 나눠 둡니다. 세션은 DPAPI로 암호화되어 설정 파일이나 로그에는 남지 않습니다." />
 
                         <Border Background="#FFF6E5" CornerRadius="8" Padding="14" Margin="0,10,0,14">
                             <StackPanel>
@@ -225,9 +239,6 @@
                             </StackPanel>
                         </Border>
 
-                        <TextBlock TextWrapping="Wrap" Foreground="#69677A" Margin="0,0,0,12"
-                                   Text="설정 탭의 기본 단축키와 같은 조합을 쓰면 그 조합은 계정 프로필이 가져갑니다. 같은 조합을 두 번 등록할 수 없기 때문이며, 자동화 동작은 그대로입니다." />
-
                         <ItemsControl x:Name="AccountProfileList">
                             <ItemsControl.ItemTemplate>
                                 <DataTemplate>
@@ -241,14 +252,6 @@
                                                 <TextBlock Text="{Binding Status}" VerticalAlignment="Center" FontWeight="SemiBold" />
                                             </StackPanel>
                                             <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
-                                                <TextBlock Text="단축키" VerticalAlignment="Center" Width="110" />
-                                                <CheckBox Content="Ctrl" Margin="8" IsChecked="{Binding Control}" />
-                                                <CheckBox Content="Alt" Margin="8" IsChecked="{Binding Alt}" />
-                                                <CheckBox Content="Shift" Margin="8" IsChecked="{Binding Shift}" />
-                                                <CheckBox Content="Win" Margin="8" IsChecked="{Binding Windows}" />
-                                                <TextBox Width="65" MaxLength="3" Text="{Binding Key, UpdateSourceTrigger=PropertyChanged}" />
-                                            </StackPanel>
-                                            <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
                                                 <TextBlock Text="세션 파일" VerticalAlignment="Center" Width="110" />
                                                 <TextBox Width="420" Text="{Binding SessionFilePath, UpdateSourceTrigger=PropertyChanged}" />
                                                 <Button Content="찾기" Click="BrowseSessionFile_Click" Tag="{Binding}" />
@@ -260,7 +263,7 @@
                                                 <TextBox Width="200" Text="{Binding BlockingProcesses, UpdateSourceTrigger=PropertyChanged}" />
                                             </StackPanel>
                                             <TextBlock Foreground="#69677A" FontSize="11" Margin="0,10,0,0"
-                                                       Text="아래 버튼은 누르는 즉시 실행됩니다. 위의 이름과 단축키는 [계정 설정 저장]으로 저장하세요." />
+                                                       Text="아래 버튼은 누르는 즉시 실행됩니다. 위의 이름과 경로는 [계정 설정 저장]으로 저장하세요." />
                                             <WrapPanel Margin="0,4,0,0">
                                                 <Button Content="이 계정으로 전환" Click="SwitchToAccount_Click" Tag="{Binding}"
                                                         Background="#6D5DFB" Foreground="White" />
@@ -274,7 +277,7 @@
                         </ItemsControl>
 
                         <TextBlock TextWrapping="Wrap" Foreground="#69677A" Margin="0,4,0,4"
-                                   Text="이름, 단축키, 세션 파일 경로 같은 설정은 [계정 설정 저장]을 눌러야 저장됩니다. [현재 로그인 계정 등록]은 지금 로그인된 계정만 프로필에 담습니다." />
+                                   Text="이름과 세션 파일 경로 같은 설정은 [계정 설정 저장]을 눌러야 저장됩니다. [현재 로그인 계정 등록]은 지금 로그인된 계정만 프로필에 담습니다." />
                         <WrapPanel Margin="0,4,0,0">
                             <Button Content="프로필 추가" Click="AddAccountProfile_Click" />
                             <Button Content="다른 계정 로그인 화면 열기" Click="OpenOtherAccountSignIn_Click" />
@@ -284,6 +287,23 @@
                         </WrapPanel>
                     </StackPanel>
                 </ScrollViewer>
+            </TabItem>
+
+            <TabItem Header="앱 설정">
+                <StackPanel Margin="24">
+                    <TextBlock Text="앱 설정" FontSize="18" FontWeight="SemiBold" />
+                    <TextBlock TextWrapping="Wrap" Foreground="#69677A" Margin="0,6,0,14"
+                               Text="OneKey 자체에 대한 설정입니다. 자동화 규칙이나 계정과는 무관합니다." />
+                    <StackPanel Orientation="Horizontal">
+                        <TextBlock Text="Windows 시작" VerticalAlignment="Center" Width="190" />
+                        <CheckBox x:Name="StartupCheck" Content="로그인 시 자동 실행" Margin="8"
+                                  VerticalAlignment="Center" />
+                    </StackPanel>
+                    <WrapPanel Margin="190,14,0,0">
+                        <Button Content="앱 설정 저장" Click="SaveAppSettings_Click"
+                                Background="#6D5DFB" Foreground="White" />
+                    </WrapPanel>
+                </StackPanel>
             </TabItem>
 
             <TabItem Header="정보">

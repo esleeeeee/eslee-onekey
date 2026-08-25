@@ -13,14 +13,14 @@ public sealed class AutomationEngine : IAsyncDisposable
         AutomationState.Restoring,
     ];
 
-    private readonly AutomationSettings _settings;
+    private AutomationSettings _settings;
     private readonly IAudioEndpointService _audio;
     private readonly IProcessService _processes;
     private readonly IDiscordVoiceStatusClient _discordVoice;
     private readonly ISessionStore _sessions;
     private readonly ISystemClock _clock;
     private readonly IAppLogger _logger;
-    private readonly VoiceChannelAutoJoin? _voiceChannelAutoJoin;
+    private VoiceChannelAutoJoin? _voiceChannelAutoJoin;
     private readonly IGameSessionService? _accountSessions;
     private DateTimeOffset? _launcherRestartedAt;
     private readonly SemaphoreSlim _gate = new(1, 1);
@@ -111,6 +111,76 @@ public sealed class AutomationEngine : IAsyncDisposable
             _gate.Release();
         }
     }
+
+    /// <summary>
+    /// 규칙마다 Discord 설정이 다를 수 있으므로, 규칙이 바뀌면 그 규칙에 맞는 음성채널
+    /// 자동 입장을 다시 만들어 씁니다. 비워 두면 생성자에서 받은 것을 계속 씁니다.
+    /// </summary>
+    public Func<AutomationSettings, VoiceChannelAutoJoin?>? VoiceChannelAutoJoinFactory { get; set; }
+
+    /// <summary>지금 자동화가 쓰고 있는 규칙입니다.</summary>
+    public AutomationSettings ActiveRule => _settings;
+
+    /// <summary>
+    /// 자동화 규칙 하나를 시작합니다. 이미 같은 실행 환경으로 돌고 있고 계정만 다르면
+    /// 오디오와 Discord는 그대로 둔 채 계정만 바꿉니다. 실행 환경까지 다르면 돌고 있는
+    /// 자동화를 건드리지 않고 무시합니다.
+    /// </summary>
+    public async Task<AutomationStartResult> StartRuleAsync(
+        AutomationSettings rule,
+        GameAccountProfile? accountProfile,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(rule);
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            if (BusyStates.Contains(State))
+            {
+                if (accountProfile is not null && SharesExecutionEnvironment(_settings, rule))
+                {
+                    _settings = rule;
+                    return await SwitchAccountCoreAsync(accountProfile, cancellationToken);
+                }
+
+                const string reason = "동일 자동화가 이미 실행 중이어서 중복 트리거를 무시했습니다.";
+                _logger.Info("duplicate-trigger", reason);
+                return AutomationStartResult.Ignored(reason);
+            }
+
+            UseRule(rule);
+            return await StartCoreAsync(AutomationTrigger.Hotkey, accountProfile, cancellationToken);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    private void UseRule(AutomationSettings rule)
+    {
+        _settings = rule;
+        if (VoiceChannelAutoJoinFactory is { } factory)
+        {
+            _voiceChannelAutoJoin = factory(rule);
+        }
+    }
+
+    /// <summary>
+    /// 실행 파일, 감시 프로세스, 오디오 장치, Discord 설정이 모두 같은지 봅니다. 이름과
+    /// 단축키, 계정만 다른 규칙이면 환경을 다시 준비할 이유가 없습니다.
+    /// </summary>
+    private static bool SharesExecutionEnvironment(AutomationSettings a, AutomationSettings b) =>
+        Comparable(a) == Comparable(b);
+
+    private static AutomationSettings Comparable(AutomationSettings rule) => rule with
+    {
+        Id = Guid.Empty,
+        Name = string.Empty,
+        Enabled = true,
+        Hotkey = new HotkeyGesture(),
+        AccountProfileId = null,
+    };
 
     /// <summary>
     /// 계정 단축키 전용 진입점입니다. 자동화 환경이 이미 준비돼 있으면 계정만 바꾸고

@@ -6,7 +6,8 @@ public sealed class AutomationCoordinator : IAsyncDisposable
     private readonly AutomationEngine _engine;
     private readonly IHotkeyService _hotkey;
     private readonly IProcessMonitor _processMonitor;
-    private readonly IReadOnlyList<AccountHotkey> _accountHotkeys;
+    private readonly IReadOnlyList<AutomationRuleBinding> _rules;
+    private string? _monitoredProcessName;
     private CancellationTokenSource? _lifetime;
     private Task? _restoreTask;
 
@@ -15,20 +16,23 @@ public sealed class AutomationCoordinator : IAsyncDisposable
         AutomationEngine engine,
         IHotkeyService hotkey,
         IProcessMonitor processMonitor,
-        IReadOnlyList<AccountHotkey>? accountHotkeys = null)
+        IReadOnlyList<AutomationRuleBinding>? rules = null)
     {
         _settings = settings;
         _engine = engine;
         _hotkey = hotkey;
         _processMonitor = processMonitor;
-        _accountHotkeys = accountHotkeys ?? [];
+        _rules = rules ?? [];
     }
 
     /// <summary>
-    /// 계정별 단축키입니다. 같은 자동화를 시작하되 어떤 게임 계정으로 시작할지가
-    /// 다릅니다. 프로필을 늘리면 단축키도 그만큼 늘어납니다.
+    /// 자동화 규칙 하나와 그 규칙의 전역 단축키입니다. 단축키는 규칙에만 있으므로
+    /// 규칙을 늘리면 단축키도 그만큼 늘어납니다. 계정 프로필은 선택 사항입니다.
     /// </summary>
-    public sealed record AccountHotkey(GameAccountProfile Profile, IHotkeyService Hotkey);
+    public sealed record AutomationRuleBinding(
+        AutomationSettings Rule,
+        IHotkeyService Hotkey,
+        GameAccountProfile? Profile = null);
 
     public bool IsPaused { get; private set; }
     public string? LastError { get; private set; }
@@ -40,10 +44,9 @@ public sealed class AutomationCoordinator : IAsyncDisposable
         _processMonitor.ProcessStarted += HandleProcessStartedAsync;
         _processMonitor.ProcessExited += HandleProcessExitedAsync;
 
-        // 계정 프로필이 같은 조합을 쓰면 그쪽이 더 구체적이므로 기본 단축키는 등록하지
-        // 않는다. 같은 조합을 두 번 등록하면 Windows가 충돌로 거부한다.
-        var claimedByAccount = _accountHotkeys.Any(account => account.Profile.Hotkey == _settings.Hotkey);
-        if (!claimedByAccount)
+        // 규칙이 하나도 없을 때만 단독 단축키를 쓴다. 규칙이 있으면 단축키는 규칙에만
+        // 있으므로, 같은 조합을 두 번 등록해 Windows가 거부하는 일이 없다.
+        if (_rules.Count == 0)
         {
             var registration = await _hotkey.RegisterAsync(_settings.Hotkey, cancellationToken);
             if (!registration.Succeeded)
@@ -52,17 +55,32 @@ public sealed class AutomationCoordinator : IAsyncDisposable
             }
         }
 
-        foreach (var account in _accountHotkeys)
+        var claimed = new List<HotkeyGesture>();
+        foreach (var binding in _rules)
         {
-            var profile = account.Profile;
-            account.Hotkey.Pressed += () => HandleAccountHotkeyAsync(profile);
-            var accountRegistration = await account.Hotkey.RegisterAsync(
-                account.Profile.Hotkey,
-                cancellationToken);
-            if (!accountRegistration.Succeeded)
+            if (!binding.Rule.Enabled)
             {
-                LastError = accountRegistration.Error
-                    ?? $"{account.Profile.Name} 단축키 등록에 실패했습니다.";
+                continue;
+            }
+
+            if (claimed.Contains(binding.Rule.Hotkey))
+            {
+                LastError = $"{binding.Rule.Name}이(가) 다른 자동화와 같은 단축키를 씁니다.";
+                continue;
+            }
+
+            var rule = binding;
+            binding.Hotkey.Pressed += () => HandleRuleHotkeyAsync(rule);
+            var ruleRegistration = await binding.Hotkey.RegisterAsync(
+                binding.Rule.Hotkey,
+                cancellationToken);
+            if (ruleRegistration.Succeeded)
+            {
+                claimed.Add(binding.Rule.Hotkey);
+            }
+            else
+            {
+                LastError = ruleRegistration.Error ?? $"{binding.Rule.Name} 단축키 등록에 실패했습니다.";
             }
         }
 
@@ -70,27 +88,45 @@ public sealed class AutomationCoordinator : IAsyncDisposable
         // 이전 세션 복구를 먼저 끝내 진행 중인 실행과 뒤엉키지 않게 한다.
         await _engine.RecoverStaleSessionAsync(cancellationToken);
 
-        if (!string.IsNullOrWhiteSpace(_settings.WatchProcessName))
-        {
-            await _processMonitor.StartAsync(
-                _settings.WatchProcessName,
-                _settings.ProcessPollInterval,
-                cancellationToken);
-        }
+        await WatchAsync(_settings, cancellationToken);
     }
 
     public void SetPaused(bool paused) => IsPaused = paused;
 
     /// <summary>
-    /// 지정한 계정으로 자동화를 시작합니다. 이미 자동화가 돌고 있으면 계정만 바꾸므로
-    /// 사용자가 먼저 자동화를 끝낼 필요가 없습니다.
+    /// 규칙의 단축키를 눌렀을 때입니다. 이미 같은 실행 환경으로 자동화가 돌고 있고
+    /// 계정만 다르면 계정만 바꾸므로, 사용자가 먼저 자동화를 끝낼 필요가 없습니다.
     /// </summary>
-    public async Task HandleAccountHotkeyAsync(GameAccountProfile profile)
+    public async Task HandleRuleHotkeyAsync(AutomationRuleBinding binding)
     {
-        if (!IsPaused)
+        if (IsPaused)
         {
-            await _engine.StartOrSwitchAccountAsync(profile, LifetimeToken);
+            return;
         }
+
+        var result = await _engine.StartRuleAsync(binding.Rule, binding.Profile, LifetimeToken);
+        if (result.Started)
+        {
+            // 규칙마다 감시 대상이 다를 수 있다.
+            await WatchAsync(binding.Rule, LifetimeToken);
+        }
+    }
+
+    /// <summary>감시 대상이 바뀐 경우에만 프로세스 감시를 다시 건다.</summary>
+    private async Task WatchAsync(AutomationSettings rule, CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(rule.WatchProcessName) ||
+            string.Equals(_monitoredProcessName, rule.WatchProcessName, StringComparison.OrdinalIgnoreCase))
+        {
+            return;
+        }
+
+        if (_monitoredProcessName is not null)
+        {
+            await _processMonitor.StopAsync();
+        }
+        _monitoredProcessName = rule.WatchProcessName;
+        await _processMonitor.StartAsync(rule.WatchProcessName, rule.ProcessPollInterval, cancellationToken);
     }
 
     public async Task HandleHotkeyAsync()
@@ -139,9 +175,9 @@ public sealed class AutomationCoordinator : IAsyncDisposable
         _processMonitor.ProcessStarted -= HandleProcessStartedAsync;
         _processMonitor.ProcessExited -= HandleProcessExitedAsync;
         _hotkey.Unregister();
-        foreach (var account in _accountHotkeys)
+        foreach (var binding in _rules)
         {
-            account.Hotkey.Unregister();
+            binding.Hotkey.Unregister();
         }
         await _processMonitor.StopAsync();
         if (_restoreTask is not null)
@@ -157,9 +193,9 @@ public sealed class AutomationCoordinator : IAsyncDisposable
         }
         await _processMonitor.DisposeAsync();
         await _hotkey.DisposeAsync();
-        foreach (var account in _accountHotkeys)
+        foreach (var binding in _rules)
         {
-            await account.Hotkey.DisposeAsync();
+            await binding.Hotkey.DisposeAsync();
         }
         _lifetime?.Dispose();
     }

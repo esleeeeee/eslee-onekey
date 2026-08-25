@@ -1,8 +1,8 @@
 namespace Eslee.OneKey.Core;
 
 /// <summary>
-/// 자동화를 어떤 게임 계정으로 시작할지 고르는 프로필입니다. 비밀번호는 담지
-/// 않습니다. 계정 전환은 런처가 이미 보관하는 로그인 세션 파일을 프로필별로 따로
+/// 게임 계정 하나의 로그인 세션을 담는 프로필입니다. 비밀번호는 담지 않습니다.
+/// 단축키는 여기 없습니다. 어떤 단축키로 어떤 계정을 쓸지는 자동화 규칙이 정합니다. 계정 전환은 런처가 이미 보관하는 로그인 세션 파일을 프로필별로 따로
 /// 두는 방식이며, 최초 등록은 사용자가 그 계정으로 직접 로그인한 뒤 저장하는
 /// 것으로 끝납니다. 특정 게임에 묶이지 않도록 경로와 프로세스 이름은 모두
 /// 설정값으로 받습니다.
@@ -13,9 +13,6 @@ public sealed record GameAccountProfile
 
     /// <summary>사용자에게 보여줄 이름입니다.</summary>
     public string Name { get; init; } = string.Empty;
-
-    /// <summary>이 계정으로 자동화를 시작하는 전역 단축키입니다.</summary>
-    public HotkeyGesture Hotkey { get; init; } = new();
 
     /// <summary>런처가 로그인 세션을 보관하는 파일의 전체 경로입니다.</summary>
     public string SessionFilePath { get; init; } = string.Empty;
