@@ -327,36 +327,16 @@ public sealed class AutomationEngine : IAsyncDisposable
                 return AutomationStartResult.Ignored(LastError);
             }
 
-            var currentEndpointId = await _audio.GetDefaultOutputIdAsync(cancellationToken);
-            if (string.IsNullOrWhiteSpace(currentEndpointId))
+            // 출력 장치를 지정하지 않은 자동화는 오디오를 건드리지 않는다. 실행이나
+            // Discord만 쓰려는 구성이 오디오 때문에 실패하면 안 된다.
+            if (SwitchesAudio)
             {
-                throw new InvalidOperationException("현재 기본 오디오 출력장치를 확인할 수 없습니다.");
+                await SwitchAudioAsync(cancellationToken);
             }
-
-            _startEntryEndpointId = currentEndpointId;
-
-            // 이전 실행에서 전환한 장치가 아직 기본값이면(복원을 건너뛴 경우) 그때의
-            // 원래 장치를 계속 복원 대상으로 둔다. 그러지 않으면 두 번째 실행부터
-            // 원래 장치 기록이 전환 대상 장치로 덮어써진다.
-            if (string.IsNullOrWhiteSpace(_originalAudioEndpointId) ||
-                currentEndpointId != _managedAudioEndpointId)
+            else
             {
-                _originalAudioEndpointId = currentEndpointId;
+                _logger.Info("audio-not-managed", "이 자동화는 오디오 장치를 바꾸지 않습니다.");
             }
-
-            var endpoints = await _audio.GetOutputEndpointsAsync(cancellationToken);
-            var target = endpoints.FirstOrDefault(endpoint =>
-                endpoint.IsActive && endpoint.Id == _settings.TargetAudioEndpointId);
-            if (target is null)
-            {
-                throw new InvalidOperationException("지정한 헤드셋이 연결되어 있지 않습니다.");
-            }
-
-            _logger.Info("audio-original-saved", "원래 기본 오디오 장치를 세션에 저장했습니다.");
-            await _audio.SetDefaultOutputAsync(target.Id, cancellationToken);
-            _managedAudioEndpointId = target.Id;
-            _logger.Info("audio-switched", "지정한 헤드셋으로 기본 출력을 전환했습니다.");
-            await SaveSessionAsync(cancellationToken);
 
             await EnsureLaunchTargetRunningAsync(trigger, cancellationToken);
             await EnsureDiscordRunningAsync(cancellationToken);
@@ -547,6 +527,43 @@ public sealed class AutomationEngine : IAsyncDisposable
         _logger.Warning("stale-session", LastError);
     }
 
+    /// <summary>출력 장치를 지정한 자동화만 오디오를 관리합니다.</summary>
+    private bool SwitchesAudio => !string.IsNullOrWhiteSpace(_settings.TargetAudioEndpointId);
+
+    private async Task SwitchAudioAsync(CancellationToken cancellationToken)
+    {
+        var currentEndpointId = await _audio.GetDefaultOutputIdAsync(cancellationToken);
+        if (string.IsNullOrWhiteSpace(currentEndpointId))
+        {
+            throw new InvalidOperationException("현재 기본 오디오 출력장치를 확인할 수 없습니다.");
+        }
+
+        _startEntryEndpointId = currentEndpointId;
+
+        // 이전 실행에서 전환한 장치가 아직 기본값이면(복원을 건너뛴 경우) 그때의
+        // 원래 장치를 계속 복원 대상으로 둔다. 그러지 않으면 두 번째 실행부터
+        // 원래 장치 기록이 전환 대상 장치로 덮어써진다.
+        if (string.IsNullOrWhiteSpace(_originalAudioEndpointId) ||
+            currentEndpointId != _managedAudioEndpointId)
+        {
+            _originalAudioEndpointId = currentEndpointId;
+        }
+
+        var endpoints = await _audio.GetOutputEndpointsAsync(cancellationToken);
+        var target = endpoints.FirstOrDefault(endpoint =>
+            endpoint.IsActive && endpoint.Id == _settings.TargetAudioEndpointId);
+        if (target is null)
+        {
+            throw new InvalidOperationException("지정한 헤드셋이 연결되어 있지 않습니다.");
+        }
+
+        _logger.Info("audio-original-saved", "원래 기본 오디오 장치를 세션에 저장했습니다.");
+        await _audio.SetDefaultOutputAsync(target.Id, cancellationToken);
+        _managedAudioEndpointId = target.Id;
+        _logger.Info("audio-switched", "지정한 헤드셋으로 기본 출력을 전환했습니다.");
+        await SaveSessionAsync(cancellationToken);
+    }
+
     private async Task EnsureLaunchTargetRunningAsync(
         AutomationTrigger trigger,
         CancellationToken cancellationToken)
@@ -563,7 +580,8 @@ public sealed class AutomationEngine : IAsyncDisposable
 
         if (string.IsNullOrWhiteSpace(_settings.LaunchExecutablePath))
         {
-            throw new InvalidOperationException("실행 파일을 설정해야 합니다.");
+            // 프로그램 실행을 끈 자동화다. 오디오나 Discord만 쓰는 구성이 있다.
+            return;
         }
 
         await _processes.StartAsync(_settings.LaunchExecutablePath, cancellationToken);
@@ -820,6 +838,13 @@ public sealed class AutomationEngine : IAsyncDisposable
 
     private async Task RestoreIfSafeAsync(CancellationToken cancellationToken)
     {
+        if (!SwitchesAudio)
+        {
+            // 애초에 오디오를 바꾸지 않은 자동화다. 되돌릴 것이 없으니 그대로 끝낸다.
+            await CompleteAsync(cancellationToken, keepRestoreTarget: true);
+            return;
+        }
+
         if (string.IsNullOrWhiteSpace(_originalAudioEndpointId) ||
             string.IsNullOrWhiteSpace(_managedAudioEndpointId))
         {

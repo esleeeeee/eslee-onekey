@@ -350,6 +350,19 @@ internal sealed class FakeVoiceChannelClient : IDiscordVoiceChannelClient
         return await ConnectAsync(cancellationToken);
     }
 
+    /// <summary>목록 조회가 돌려줄 값입니다.</summary>
+    public List<DiscordGuild> Guilds { get; } = [];
+    public Dictionary<string, List<DiscordVoiceChannel>> VoiceChannels { get; } = [];
+
+    public Task<IReadOnlyList<DiscordGuild>> GetGuildsAsync(CancellationToken cancellationToken) =>
+        Task.FromResult<IReadOnlyList<DiscordGuild>>(Guilds);
+
+    public Task<IReadOnlyList<DiscordVoiceChannel>> GetVoiceChannelsAsync(
+        string guildId,
+        CancellationToken cancellationToken) =>
+        Task.FromResult<IReadOnlyList<DiscordVoiceChannel>>(
+            VoiceChannels.TryGetValue(guildId, out var channels) ? channels : []);
+
     public Task DisconnectAsync(CancellationToken cancellationToken)
     {
         Connected = false;

@@ -51,6 +51,17 @@ public interface IDiscordVoiceChannelClient
     Task DisconnectAsync(CancellationToken cancellationToken);
     Task<string?> GetSelectedVoiceChannelIdAsync(CancellationToken cancellationToken);
     Task SelectVoiceChannelAsync(string channelId, CancellationToken cancellationToken);
+
+    /// <summary>지금 로그인한 사용자가 가입한 서버입니다.</summary>
+    Task<IReadOnlyList<DiscordGuild>> GetGuildsAsync(CancellationToken cancellationToken);
+
+    /// <summary>
+    /// 그 서버에서 사용자에게 보이는 음성채널입니다. 볼 수 없는 채널은 애초에
+    /// 로컬 Discord가 모르므로 목록에 오르지 않습니다.
+    /// </summary>
+    Task<IReadOnlyList<DiscordVoiceChannel>> GetVoiceChannelsAsync(
+        string guildId,
+        CancellationToken cancellationToken);
 }
 
 public interface ISessionStore

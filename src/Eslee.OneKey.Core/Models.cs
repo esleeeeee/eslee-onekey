@@ -30,6 +30,12 @@ public sealed record DiscordVoiceCheck(DiscordVoiceState State, string? Error = 
 
 public sealed record AudioEndpoint(string Id, string Name, bool IsActive);
 
+/// <summary>사용자가 가입한 Discord 서버입니다. 이름은 로컬 Discord가 알려 줍니다.</summary>
+public sealed record DiscordGuild(string Id, string Name);
+
+/// <summary>사용자에게 보이는 음성채널입니다.</summary>
+public sealed record DiscordVoiceChannel(string Id, string Name);
+
 public sealed record HotkeyGesture(
     bool Control = true,
     bool Alt = true,
@@ -85,6 +91,12 @@ public sealed record AutomationSettings
 
     /// <summary>음성채널 링크 또는 Channel ID입니다. 비밀값이 아닙니다.</summary>
     public string VoiceChannelTarget { get; init; } = string.Empty;
+
+    /// <summary>
+    /// 음성채널을 고른 서버의 ID입니다. 목록을 다시 열 때 어느 서버를 보고 있었는지
+    /// 기억하는 용도이며, 비밀값이 아닙니다.
+    /// </summary>
+    public string VoiceChannelGuildId { get; init; } = string.Empty;
 
     /// <summary>RPC용 Discord 애플리케이션 Client ID입니다. 공개 값이라 설정에 보관합니다.</summary>
     public string DiscordRpcClientId { get; init; } = string.Empty;
