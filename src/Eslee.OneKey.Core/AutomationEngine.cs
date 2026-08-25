@@ -100,6 +100,97 @@ public sealed class AutomationEngine : IAsyncDisposable
                 return AutomationStartResult.Ignored(reason);
             }
 
+            return await StartCoreAsync(trigger, accountProfile, cancellationToken);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    /// <summary>
+    /// 계정 단축키 전용 진입점입니다. 자동화 환경이 이미 준비돼 있으면 계정만 바꾸고
+    /// 오디오와 Discord는 그대로 둡니다. 준비 전이면 평소대로 전체 자동화를 시작합니다.
+    /// 계정을 바꾸려고 사용자가 먼저 자동화를 끝낼 필요는 없어야 합니다.
+    /// </summary>
+    public async Task<AutomationStartResult> StartOrSwitchAccountAsync(
+        GameAccountProfile profile,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(profile);
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            return BusyStates.Contains(State)
+                ? await SwitchAccountCoreAsync(profile, cancellationToken)
+                : await StartCoreAsync(AutomationTrigger.Hotkey, profile, cancellationToken);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    /// <summary>
+    /// 실행 중인 자동화는 그대로 두고 계정만 바꿉니다. 오디오 복원, Discord 재입장,
+    /// 환경 재준비는 하지 않습니다.
+    /// </summary>
+    private async Task<AutomationStartResult> SwitchAccountCoreAsync(
+        GameAccountProfile profile,
+        CancellationToken cancellationToken)
+    {
+        if (_accountSessions is null)
+        {
+            return AutomationStartResult.Ignored("계정 전환 기능을 쓸 수 없습니다.");
+        }
+
+        var result = await ActivateAccountAsync(profile, cancellationToken);
+        if (result.Outcome == GameSessionOutcome.AlreadyActive)
+        {
+            const string reason = "이미 이 계정이라 런처를 다시 시작하지 않았습니다.";
+            _logger.Info("account-already-active", reason);
+            return AutomationStartResult.Ignored(reason);
+        }
+
+        if (result.Outcome != GameSessionOutcome.Switched)
+        {
+            // 실행 중인 자동화는 건드리지 않고 실패만 알린다.
+            LastError = result.Message ?? "계정 전환에 실패했습니다.";
+            return AutomationStartResult.Ignored(LastError);
+        }
+
+        LastError = null;
+        await StartLauncherAsync(cancellationToken);
+        var confirmation = await _accountSessions.ConfirmActiveAsync(profile, cancellationToken);
+        if (confirmation.Outcome == GameSessionOutcome.NeedsEnrollment)
+        {
+            LastError = confirmation.Message ?? "런처가 저장된 세션을 거부했습니다.";
+            return AutomationStartResult.Ignored(LastError);
+        }
+
+        _logger.Info("account-switched", "실행 중인 자동화를 유지한 채 계정을 전환했습니다.");
+        return AutomationStartResult.Success();
+    }
+
+    /// <summary>계정을 바꾼 뒤 런처를 다시 띄웁니다.</summary>
+    private async Task StartLauncherAsync(CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(_settings.LaunchExecutablePath))
+        {
+            return;
+        }
+
+        await _processes.StartAsync(_settings.LaunchExecutablePath, cancellationToken);
+        _logger.Info("launch-restarted", "계정을 바꾼 뒤 실행 파일을 다시 시작했습니다.");
+    }
+
+    private async Task<AutomationStartResult> StartCoreAsync(
+        AutomationTrigger trigger,
+        GameAccountProfile? accountProfile,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
             if (!_settings.Enabled)
             {
                 return AutomationStartResult.Ignored("자동화가 비활성화되어 있습니다.");
@@ -170,10 +261,6 @@ public sealed class AutomationEngine : IAsyncDisposable
             await RestoreAfterFailedStartAsync(cancellationToken);
             SetState(AutomationState.Failed);
             return AutomationStartResult.Ignored(exception.Message);
-        }
-        finally
-        {
-            _gate.Release();
         }
     }
 

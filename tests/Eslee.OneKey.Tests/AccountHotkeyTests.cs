@@ -119,7 +119,17 @@ public sealed class AccountHotkeyTests
 internal sealed class FakeGameSessionService : IGameSessionService
 {
     public List<Guid> Activated { get; } = [];
+    public List<Guid> Confirmed { get; } = [];
     public GameSessionResult Result { get; set; } = new(GameSessionOutcome.Switched);
+    public GameSessionResult Confirmation { get; set; } = new(GameSessionOutcome.Switched);
+
+    public Task<GameSessionResult> ConfirmActiveAsync(
+        GameAccountProfile profile,
+        CancellationToken cancellationToken)
+    {
+        Confirmed.Add(profile.Id);
+        return Task.FromResult(Confirmation);
+    }
 
     public Task<bool> CaptureAsync(GameAccountProfile profile, CancellationToken cancellationToken) =>
         Task.FromResult(true);
