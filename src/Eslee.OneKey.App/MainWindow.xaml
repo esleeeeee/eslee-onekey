@@ -1,7 +1,8 @@
 <Window x:Class="Eslee.OneKey.App.MainWindow"
         xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
         xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
-        Title="eslee OneKey" Height="760" Width="1020" MinHeight="640" MinWidth="900"
+        Title="eslee OneKey" Icon="Assets/eslee-onekey.ico"
+        Height="760" Width="1020" MinHeight="640" MinWidth="900"
         Background="#F5F6FA" WindowStartupLocation="CenterScreen">
     <Window.Resources>
         <!--

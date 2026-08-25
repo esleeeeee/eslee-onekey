@@ -24,11 +24,34 @@ public sealed class TrayIconService : IDisposable
         _icon = new Forms.NotifyIcon
         {
             Text = "eslee OneKey",
-            Icon = SystemIcons.Application,
+            Icon = LoadAppIcon(),
             ContextMenuStrip = menu,
             Visible = true,
         };
         _icon.DoubleClick += (_, _) => window.OpenFromTray();
+    }
+
+    /// <summary>
+    /// 실행 파일에 박아 둔 아이콘을 그대로 씁니다. 트레이와 탐색기가 같은 그림을
+    /// 보여 주어야 합니다. 읽지 못하면 기본 아이콘으로 돌아갑니다.
+    /// </summary>
+    private static Icon LoadAppIcon()
+    {
+        try
+        {
+            var path = Environment.ProcessPath;
+            if (!string.IsNullOrWhiteSpace(path))
+            {
+                return Icon.ExtractAssociatedIcon(path) ?? SystemIcons.Application;
+            }
+        }
+        catch (Exception exception) when (exception is ArgumentException
+            or System.IO.FileNotFoundException
+            or System.ComponentModel.Win32Exception)
+        {
+            // 아이콘을 읽지 못해도 트레이는 떠 있어야 합니다.
+        }
+        return SystemIcons.Application;
     }
 
     private bool _paused;
