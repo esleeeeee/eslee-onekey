@@ -146,6 +146,39 @@ public sealed class AccountSwitchWhileActiveTests
     }
 
     [Fact]
+    public async Task TheSwitchOnlyPathNeverStartsTheAutomation()
+    {
+        var harness = Create();
+        var audioBefore = harness.Audio.DefaultId;
+
+        var result = await harness.Engine.SwitchAccountAsync(Korea);
+
+        Assert.True(result.Started);
+        Assert.Equal([Korea.Id], harness.Sessions.Activated);
+        // UI의 계정 전환 버튼은 오디오도 Discord도 건드리지 않는다.
+        Assert.Empty(harness.Audio.SetCalls);
+        Assert.Equal(audioBefore, harness.Audio.DefaultId);
+        Assert.Equal(0, harness.Voice.Calls);
+        Assert.Equal(AutomationState.Idle, harness.Engine.State);
+        // 계정을 바꿨으면 런처는 다시 띄운다.
+        Assert.Equal(["launcher.exe"], harness.Processes.StartedPaths);
+    }
+
+    [Fact]
+    public async Task TheSwitchOnlyPathDoesNothingForTheAccountAlreadyInUse()
+    {
+        var harness = Create();
+        harness.Sessions.Result = new GameSessionResult(GameSessionOutcome.AlreadyActive);
+
+        var result = await harness.Engine.SwitchAccountAsync(Korea);
+
+        Assert.False(result.Started);
+        Assert.Empty(harness.Processes.StartedPaths);
+        Assert.Empty(harness.Sessions.Confirmed);
+        Assert.Equal(AutomationState.Idle, harness.Engine.State);
+    }
+
+    [Fact]
     public async Task WithoutARunningAutomationTheHotkeyStartsTheWholeThing()
     {
         var harness = Create();

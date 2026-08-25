@@ -365,8 +365,8 @@ public partial class MainWindow : Window
             await RefreshAccountStatusesAsync();
             MessageBox.Show(
                 captured
-                    ? $"{viewModel.Name} 프로필에 현재 로그인 세션을 저장했습니다."
-                    : "현재 로그인된 세션을 찾지 못했습니다. 런처에 로그인한 뒤 다시 시도하세요.",
+                    ? $"지금 로그인된 계정을 {viewModel.Name} 프로필에 등록했습니다."
+                    : "로그인된 계정을 찾지 못했습니다. 런처에 로그인한 뒤 다시 시도하세요.",
                 "계정 프로필");
         }
         catch (Exception exception)
@@ -377,44 +377,95 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// 다시 등록은 저장본을 버리고 새로 로그인할 준비까지 해 줍니다. 런처의 로그아웃은
-    /// 쓰지 않습니다. 서버가 세션을 폐기하면 다른 계정의 저장본까지 무효가 되기 때문입니다.
+    /// 자동화가 실행 중일 때 계정 단축키가 쓰는 전환 경로를 그대로 부릅니다.
+    /// 키 입력을 흉내 내지 않고, 오디오와 Discord도 건드리지 않습니다.
     /// </summary>
-    private async void ReenrollAccountSession_Click(object sender, RoutedEventArgs e)
+    private async void SwitchToAccount_Click(object sender, RoutedEventArgs e)
     {
-        if (ProfileOf(sender) is not { } viewModel ||
-            CreateAccountSessionService() is not { } service)
+        if (ProfileOf(sender) is not { } viewModel)
         {
             return;
         }
 
-        var profile = viewModel.ToProfile();
-        await service.ForgetAsync(profile.Id, CancellationToken.None);
-        var result = await service.PrepareForNewSignInAsync(profile, CancellationToken.None);
-        await RefreshAccountStatusesAsync();
-        MessageBox.Show(
-            result.CanContinue
-                ? $"{viewModel.Name} 저장본을 지우고 로그인 준비를 마쳤습니다. 런처를 실행해 이 계정으로 로그인한 뒤 현재 세션 저장을 누르세요."
-                : result.Message ?? "로그인 준비에 실패했습니다.",
-            "계정 프로필");
+        if (_engine is null || SavedProfile(viewModel.Id) is not { } profile)
+        {
+            MessageBox.Show(
+                "먼저 계정 설정 저장을 눌러 이 프로필을 저장하세요.",
+                "계정 프로필");
+            return;
+        }
+
+        try
+        {
+            // 오디오나 Discord는 건드리지 않는다. 계정만 바꾼다.
+            var result = await _engine.SwitchAccountAsync(profile, CancellationToken.None);
+            await RefreshAccountStatusesAsync();
+            MessageBox.Show(
+                result.Started
+                    ? $"{profile.Name} 계정으로 전환했습니다."
+                    : result.Reason ?? "계정을 전환하지 않았습니다.",
+                "계정 프로필");
+        }
+        catch (Exception exception)
+        {
+            _logger?.Error("account-switch-failed", exception, "계정 전환에 실패했습니다.");
+            MessageBox.Show(exception.Message, "계정 프로필", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
     }
 
-    private async void PrepareNewSignIn_Click(object sender, RoutedEventArgs e)
+    /// <summary>
+    /// 다른 계정을 등록할 수 있게 로그인 화면까지 열어 줍니다. 지금 로그인된 계정은
+    /// 먼저 회수해 두고, 런처의 로그아웃 명령은 쓰지 않습니다. 서버가 세션을 폐기하면
+    /// 이미 등록해 둔 다른 계정의 저장본까지 무효가 되기 때문입니다.
+    /// </summary>
+    private async void OpenOtherAccountSignIn_Click(object sender, RoutedEventArgs e)
     {
-        if (_accountProfiles.FirstOrDefault() is not { } first ||
-            CreateAccountSessionService() is not { } service)
+        if (CreateAccountSessionService() is not { } service)
         {
             return;
         }
 
-        var result = await service.PrepareForNewSignInAsync(first.ToProfile(), CancellationToken.None);
-        await RefreshAccountStatusesAsync();
-        MessageBox.Show(
-            result.CanContinue
-                ? "로그인되지 않은 상태를 준비했습니다. 런처를 실행해 다음 계정으로 로그인한 뒤 그 프로필의 현재 세션 저장을 누르세요."
-                : result.Message ?? "로그인 준비에 실패했습니다.",
-            "계정 프로필");
+        if (_appSettings.AccountProfiles.FirstOrDefault() is not { } profile)
+        {
+            MessageBox.Show(
+                "먼저 계정 프로필을 하나 만들고 계정 설정 저장을 누르세요.",
+                "계정 프로필");
+            return;
+        }
+
+        try
+        {
+            var result = await service.PrepareForNewSignInAsync(profile, CancellationToken.None);
+            await RefreshAccountStatusesAsync();
+            if (!result.CanContinue)
+            {
+                MessageBox.Show(result.Message ?? "로그인 화면을 열지 못했습니다.", "계정 프로필");
+                return;
+            }
+
+            if (string.IsNullOrWhiteSpace(_automation.LaunchExecutablePath))
+            {
+                MessageBox.Show(
+                    "로그인되지 않은 상태로 만들었습니다. 설정 탭에 실행 파일이 없어 런처는 직접 실행해 주세요.",
+                    "계정 프로필");
+                return;
+            }
+
+            await _processes.StartAsync(_automation.LaunchExecutablePath, CancellationToken.None);
+            MessageBox.Show(
+                "로그인 화면을 열었습니다. 다음 계정으로 로그인한 뒤 그 프로필에서 현재 로그인 계정 등록을 누르세요.",
+                "계정 프로필");
+        }
+        catch (Exception exception)
+        {
+            _logger?.Error("account-signin-open-failed", exception, "로그인 화면을 열지 못했습니다.");
+            MessageBox.Show(exception.Message, "계정 프로필", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
     }
+
+    /// <summary>저장된 프로필을 씁니다. 편집 중인 값이 아니라 실제로 저장된 설정입니다.</summary>
+    private GameAccountProfile? SavedProfile(Guid id) =>
+        _appSettings.AccountProfiles.FirstOrDefault(profile => profile.Id == id);
 
     private async void DeleteAccountProfile_Click(object sender, RoutedEventArgs e)
     {

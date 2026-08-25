@@ -132,6 +132,26 @@ public sealed class AutomationEngine : IAsyncDisposable
     }
 
     /// <summary>
+    /// 계정만 바꿉니다. 자동화를 시작하지도, 끝내지도 않습니다. 자동화가 실행 중일 때
+    /// 계정 단축키가 쓰는 경로와 같습니다. UI의 계정 전환 버튼이 이걸 부릅니다.
+    /// </summary>
+    public async Task<AutomationStartResult> SwitchAccountAsync(
+        GameAccountProfile profile,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(profile);
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            return await SwitchAccountCoreAsync(profile, cancellationToken);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    /// <summary>
     /// 실행 중인 자동화는 그대로 두고 계정만 바꿉니다. 오디오 복원, Discord 재입장,
     /// 환경 재준비는 하지 않습니다.
     /// </summary>
