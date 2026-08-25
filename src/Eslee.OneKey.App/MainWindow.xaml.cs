@@ -22,13 +22,19 @@ public partial class MainWindow : Window
     private readonly CoreAudioEndpointService _audio = new();
     private readonly WindowsProcessService _processes = new();
     private readonly StartupRegistrationService _startup = new();
-    private readonly ObservableCollection<AccountProfileViewModel> _accountProfiles = [];
     private JsonSettingsStore? _settingsStore;
     private JsonSessionStore? _sessionStore;
     private DpapiSecretStore? _secretStore;
     private FileAppLogger? _logger;
     private AppSettings _appSettings = new();
     private AutomationSettings _automation = new();
+
+    /// <summary>왼쪽 목록에 보이는 줄입니다.</summary>
+    private readonly ObservableCollection<AutomationRuleViewModel> _ruleItems = [];
+
+    /// <summary>봇도 함께 들어가 있는 서버만 담습니다. 앱이 도는 동안 재사용합니다.</summary>
+    private readonly List<DiscordGuild> _guilds = [];
+    private readonly Dictionary<string, IReadOnlyList<DiscordVoiceChannel>> _voiceChannels = [];
 
     /// <summary>자동화 규칙 전체입니다. 단축키는 규칙에만 있습니다.</summary>
     private readonly List<AutomationSettings> _rules = [];
@@ -194,9 +200,9 @@ public partial class MainWindow : Window
     {
         _initializationFailed = true;
         var summary = BuildInitializationErrorSummary(exception);
-        EnabledStatus.Text = "초기화 실패";
-        StateStatus.Text = "초기화 실패";
+        GlobalStateText.Text = "초기화 실패";
         LastErrorStatus.Text = $"{summary} 로그: {_paths.LogFile}";
+        LastErrorStatus.Visibility = Visibility.Visible;
         StartNowButton.IsEnabled = false;
         PauseButton.IsEnabled = false;
         ManualRestoreButton.IsEnabled = false;
@@ -289,257 +295,10 @@ public partial class MainWindow : Window
         }
     }
 
-    private void LoadAccountProfilesIntoControls()
-    {
-        _accountProfiles.Clear();
-        foreach (var profile in _appSettings.AccountProfiles)
-        {
-            _accountProfiles.Add(new AccountProfileViewModel(profile));
-        }
-        AccountProfileList.ItemsSource = _accountProfiles;
-    }
-
-    private static AccountProfileViewModel? ProfileOf(object sender) =>
-        (sender as FrameworkElement)?.Tag as AccountProfileViewModel;
-
-    /// <summary>등록 상태는 저장된 세션 유무와 런처의 거부 여부로 결정됩니다.</summary>
-    private async Task RefreshAccountStatusesAsync()
-    {
-        var service = CreateAccountSessionService();
-        if (service is null)
-        {
-            return;
-        }
-
-        foreach (var viewModel in _accountProfiles)
-        {
-            try
-            {
-                var status = await service.GetStatusAsync(viewModel.ToProfile(), CancellationToken.None);
-                viewModel.Status = AccountProfileViewModel.Describe(status);
-            }
-            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
-            {
-                viewModel.Status = "확인 실패";
-            }
-        }
-    }
-
-    private async void RefreshAccountStatus_Click(object sender, RoutedEventArgs e) =>
-        await RefreshAccountStatusesAsync();
-
-    private void AddAccountProfile_Click(object sender, RoutedEventArgs e)
-    {
-        var template = _accountProfiles.LastOrDefault();
-        _accountProfiles.Add(new AccountProfileViewModel
-        {
-            Name = "새 계정",
-            SessionFilePath = template?.SessionFilePath ?? string.Empty,
-            LauncherProcesses = template?.LauncherProcesses ?? string.Empty,
-            BlockingProcesses = template?.BlockingProcesses ?? string.Empty,
-            Status = "미등록",
-        });
-    }
-
-    private void BrowseSessionFile_Click(object sender, RoutedEventArgs e)
-    {
-        if (ProfileOf(sender) is not { } viewModel)
-        {
-            return;
-        }
-
-        var dialog = new OpenFileDialog
-        {
-            Title = "런처 로그인 세션 파일 선택",
-            Filter = "설정 파일 (*.yaml;*.yml;*.json;*.dat)|*.yaml;*.yml;*.json;*.dat|모든 파일 (*.*)|*.*",
-            CheckFileExists = true,
-        };
-        if (dialog.ShowDialog() == true)
-        {
-            viewModel.SessionFilePath = dialog.FileName;
-        }
-    }
-
-    private async void CaptureAccountSession_Click(object sender, RoutedEventArgs e)
-    {
-        if (ProfileOf(sender) is not { } viewModel ||
-            CreateAccountSessionService() is not { } service)
-        {
-            return;
-        }
-
-        try
-        {
-            var captured = await service.CaptureAsync(viewModel.ToProfile(), CancellationToken.None);
-            await RefreshAccountStatusesAsync();
-            MessageBox.Show(
-                captured
-                    ? $"지금 로그인된 계정을 {viewModel.Name} 프로필에 등록했습니다."
-                    : "로그인된 계정을 찾지 못했습니다. 런처에 로그인한 뒤 다시 시도하세요.",
-                "계정 프로필");
-        }
-        catch (Exception exception)
-        {
-            _logger?.Error("account-capture-failed", exception, "세션 저장에 실패했습니다.");
-            MessageBox.Show(exception.Message, "계정 프로필", MessageBoxButton.OK, MessageBoxImage.Warning);
-        }
-    }
-
-    /// <summary>
-    /// 자동화가 실행 중일 때 계정 단축키가 쓰는 전환 경로를 그대로 부릅니다.
-    /// 키 입력을 흉내 내지 않고, 오디오와 Discord도 건드리지 않습니다.
-    /// </summary>
-    private async void SwitchToAccount_Click(object sender, RoutedEventArgs e)
-    {
-        if (ProfileOf(sender) is not { } viewModel)
-        {
-            return;
-        }
-
-        if (_engine is null || SavedProfile(viewModel.Id) is not { } profile)
-        {
-            MessageBox.Show(
-                "먼저 계정 설정 저장을 눌러 이 프로필을 저장하세요.",
-                "계정 프로필");
-            return;
-        }
-
-        try
-        {
-            // 오디오나 Discord는 건드리지 않는다. 계정만 바꾼다.
-            var result = await _engine.SwitchAccountAsync(profile, CancellationToken.None);
-            await RefreshAccountStatusesAsync();
-            MessageBox.Show(
-                result.Started
-                    ? $"{profile.Name} 계정으로 전환했습니다."
-                    : result.Reason ?? "계정을 전환하지 않았습니다.",
-                "계정 프로필");
-        }
-        catch (Exception exception)
-        {
-            _logger?.Error("account-switch-failed", exception, "계정 전환에 실패했습니다.");
-            MessageBox.Show(exception.Message, "계정 프로필", MessageBoxButton.OK, MessageBoxImage.Warning);
-        }
-    }
-
-    /// <summary>
-    /// 다른 계정을 등록할 수 있게 로그인 화면까지 열어 줍니다. 지금 로그인된 계정은
-    /// 먼저 회수해 두고, 런처의 로그아웃 명령은 쓰지 않습니다. 서버가 세션을 폐기하면
-    /// 이미 등록해 둔 다른 계정의 저장본까지 무효가 되기 때문입니다.
-    /// </summary>
-    private async void OpenOtherAccountSignIn_Click(object sender, RoutedEventArgs e)
-    {
-        if (CreateAccountSessionService() is not { } service)
-        {
-            return;
-        }
-
-        if (_appSettings.AccountProfiles.FirstOrDefault() is not { } profile)
-        {
-            MessageBox.Show(
-                "먼저 계정 프로필을 하나 만들고 계정 설정 저장을 누르세요.",
-                "계정 프로필");
-            return;
-        }
-
-        try
-        {
-            var result = await service.PrepareForNewSignInAsync(profile, CancellationToken.None);
-            await RefreshAccountStatusesAsync();
-            if (!result.CanContinue)
-            {
-                MessageBox.Show(result.Message ?? "로그인 화면을 열지 못했습니다.", "계정 프로필");
-                return;
-            }
-
-            if (string.IsNullOrWhiteSpace(_automation.LaunchExecutablePath))
-            {
-                MessageBox.Show(
-                    "로그인되지 않은 상태로 만들었습니다. 설정 탭에 실행 파일이 없어 런처는 직접 실행해 주세요.",
-                    "계정 프로필");
-                return;
-            }
-
-            await _processes.StartAsync(_automation.LaunchExecutablePath, CancellationToken.None);
-            MessageBox.Show(
-                "로그인 화면을 열었습니다. 다음 계정으로 로그인한 뒤 그 프로필에서 현재 로그인 계정 등록을 누르세요.",
-                "계정 프로필");
-        }
-        catch (Exception exception)
-        {
-            _logger?.Error("account-signin-open-failed", exception, "로그인 화면을 열지 못했습니다.");
-            MessageBox.Show(exception.Message, "계정 프로필", MessageBoxButton.OK, MessageBoxImage.Warning);
-        }
-    }
-
-    /// <summary>저장된 프로필을 씁니다. 편집 중인 값이 아니라 실제로 저장된 설정입니다.</summary>
-    private GameAccountProfile? SavedProfile(Guid id) =>
-        _appSettings.AccountProfiles.FirstOrDefault(profile => profile.Id == id);
-
-    private async void DeleteAccountProfile_Click(object sender, RoutedEventArgs e)
-    {
-        if (ProfileOf(sender) is not { } viewModel)
-        {
-            return;
-        }
-
-        if (MessageBox.Show(
-                $"{viewModel.Name} 프로필과 저장된 로그인 세션을 삭제할까요?",
-                "계정 프로필",
-                MessageBoxButton.OKCancel,
-                MessageBoxImage.Question) != MessageBoxResult.OK)
-        {
-            return;
-        }
-
-        if (CreateAccountSessionService() is { } service)
-        {
-            await service.ForgetAsync(viewModel.Id, CancellationToken.None);
-        }
-        _accountProfiles.Remove(viewModel);
-    }
-
-    private async void SaveAccountProfiles_Click(object sender, RoutedEventArgs e)
-    {
-        if (_initializationFailed || _settingsStore is null)
-        {
-            return;
-        }
-
-        try
-        {
-            var profiles = _accountProfiles.Select(item => item.ToProfile()).ToList();
-            foreach (var profile in profiles)
-            {
-                if (string.IsNullOrWhiteSpace(profile.Name))
-                {
-                    throw new InvalidOperationException("계정 프로필 이름을 입력하세요.");
-                }
-                if (string.IsNullOrWhiteSpace(profile.SessionFilePath))
-                {
-                    throw new InvalidOperationException($"{profile.Name}의 세션 파일을 지정하세요.");
-                }
-            }
-
-            _appSettings = _appSettings with { AccountProfiles = profiles };
-            await _settingsStore.SaveAsync(_appSettings, CancellationToken.None);
-            _logger?.Info("account-profiles-saved", "계정 프로필을 저장했습니다.");
-            await StartRuntimeAsync();
-            AccountProfileCombo.ItemsSource = _appSettings.AccountProfiles;
-            AccountProfileCombo.SelectedValue = _automation.AccountProfileId;
-            await RefreshAccountStatusesAsync();
-            MessageBox.Show("계정 프로필을 저장했습니다.", "계정 프로필");
-        }
-        catch (Exception exception)
-        {
-            _logger?.Error("account-profiles-save-failed", exception, "계정 프로필 저장에 실패했습니다.");
-            MessageBox.Show(exception.Message, "계정 프로필", MessageBoxButton.OK, MessageBoxImage.Warning);
-        }
-    }
-
     /// <summary>
     /// 규칙마다 전역 단축키를 하나씩 답니다. 규칙이 계정 프로필을 지정했으면 그 계정으로
-    /// 시작하고, 지정하지 않았으면 계정을 건드리지 않습니다.
+    /// 시작하고, 지정하지 않았으면 계정을 건드리지 않습니다. 꺼 둔 규칙은 단축키를
+    /// 등록하지 않습니다.
     /// </summary>
     private IReadOnlyList<AutomationCoordinator.AutomationRuleBinding> CreateRuleBindings(nint windowHandle) =>
         _rules
@@ -547,7 +306,9 @@ public partial class MainWindow : Window
             .Select(rule => new AutomationCoordinator.AutomationRuleBinding(
                 rule,
                 new WindowsGlobalHotkeyService(windowHandle),
-                rule.AccountProfileId is { } id ? SavedProfile(id) : null))
+                rule.AccountProfileId is { } id
+                    ? _appSettings.AccountProfiles.FirstOrDefault(profile => profile.Id == id)
+                    : null))
             .ToArray();
 
     /// <summary>지금 편집 중인 규칙입니다. 없으면 첫 규칙을 씁니다.</summary>
@@ -676,12 +437,11 @@ public partial class MainWindow : Window
         RpcStatusText.Text = "연결 중...";
         try
         {
-            var suppliedSecret = RpcClientSecretPassword.Password;
             var storedSecret = (await LoadRpcTokensAsync(CancellationToken.None))?.ClientSecret;
             using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
             var (result, tokens) = await new DiscordRpcAuthorizer(client).AuthorizeAsync(
-                RpcClientIdText.Text.Trim(),
-                string.IsNullOrWhiteSpace(suppliedSecret) ? storedSecret : suppliedSecret,
+                AppDefaults.ResolveRpcClientId(RpcClientIdText.Text),
+                storedSecret,
                 CancellationToken.None);
 
             if (result.Succeeded && tokens is not null)
@@ -689,7 +449,6 @@ public partial class MainWindow : Window
                 await _secretStore.SaveRpcSecretsAsync(
                     System.Text.Json.JsonSerializer.Serialize(tokens),
                     CancellationToken.None);
-                RpcClientSecretPassword.Clear();
                 RpcStatusText.Text = "연결됨";
                 _logger?.Info("rpc-connected", "Discord RPC 인증을 완료했습니다.");
             }
@@ -714,37 +473,194 @@ public partial class MainWindow : Window
 
     private void ApplySettingsToControls()
     {
-        LoadAccountProfilesIntoControls();
-        RefreshRuleCombo(_rules.IndexOf(_automation) is var found && found >= 0 ? found : 0);
+        RefreshRuleList(_rules.IndexOf(_automation) is var found && found >= 0 ? found : 0);
         StartupCheck.IsChecked = _appSettings.StartWithWindows || _startup.IsEnabled();
     }
 
-    /// <summary>규칙 목록을 다시 그리고 지정한 규칙을 폼에 올립니다.</summary>
-    private void RefreshRuleCombo(int index)
+    /// <summary>왼쪽 목록을 다시 그리고 지정한 자동화를 오른쪽에 올립니다.</summary>
+    private void RefreshRuleList(int index)
     {
         _loadingRule = true;
-        AutomationRuleCombo.ItemsSource = null;
-        AutomationRuleCombo.ItemsSource = _rules;
+        _ruleItems.Clear();
+        foreach (var rule in _rules)
+        {
+            _ruleItems.Add(new AutomationRuleViewModel(rule));
+        }
+        AutomationList.ItemsSource = _ruleItems;
         _editingRule = Math.Clamp(index, 0, Math.Max(0, _rules.Count - 1));
-        AutomationRuleCombo.SelectedIndex = _rules.Count == 0 ? -1 : _editingRule;
+        AutomationList.SelectedIndex = _rules.Count == 0 ? -1 : _editingRule;
         _loadingRule = false;
         if (_rules.Count > 0)
         {
             LoadRuleIntoControls(_rules[_editingRule]);
         }
+        UpdateStatus();
     }
 
     private void AutomationRule_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
     {
-        if (_loadingRule || AutomationRuleCombo.SelectedIndex < 0)
+        if (_loadingRule || AutomationList.SelectedIndex < 0)
         {
             return;
         }
 
         // 편집하던 값을 잃지 않도록 먼저 되받아 둔다. 저장은 저장 버튼이 한다.
         CommitEditingRule();
-        _editingRule = AutomationRuleCombo.SelectedIndex;
+        _editingRule = AutomationList.SelectedIndex;
         LoadRuleIntoControls(_rules[_editingRule]);
+    }
+
+    /// <summary>목록의 ON/OFF입니다. 끈 자동화는 단축키를 등록하지 않습니다.</summary>
+    private async void ToggleRuleEnabled_Click(object sender, RoutedEventArgs e)
+    {
+        if ((sender as FrameworkElement)?.Tag is not AutomationRuleViewModel item)
+        {
+            return;
+        }
+
+        var index = _rules.FindIndex(rule => rule.Id == item.Id);
+        if (index < 0)
+        {
+            return;
+        }
+
+        if (index == _editingRule)
+        {
+            CommitEditingRule();
+        }
+        _rules[index] = _rules[index] with { Enabled = item.Enabled };
+        if (index == _editingRule)
+        {
+            EnabledCheck.IsChecked = item.Enabled;
+        }
+        await ApplyRulesAsync("자동화 사용 여부를 바꿨습니다.");
+    }
+
+    /// <summary>규칙을 저장하고 단축키를 다시 등록합니다.</summary>
+    private async Task ApplyRulesAsync(string logMessage)
+    {
+        if (_settingsStore is null)
+        {
+            return;
+        }
+
+        _appSettings = _appSettings with
+        {
+            SchemaVersion = SettingsMigration.CurrentSchemaVersion,
+            Automations = [.. _rules],
+        };
+        await _settingsStore.SaveAsync(_appSettings, CancellationToken.None);
+        _logger?.Info("automation-rules-applied", logMessage);
+        await StartRuntimeAsync();
+        UpdateStatus();
+    }
+
+    /// <summary>선택한 자동화를 오른쪽 상세 화면에 올립니다.</summary>
+    private void LoadRuleIntoControls(AutomationSettings rule)
+    {
+        _automation = rule;
+        _loadingRule = true;
+
+        AutomationNameText.Text = rule.Name;
+        EnabledCheck.IsChecked = rule.Enabled;
+        CtrlCheck.IsChecked = rule.Hotkey.Control;
+        AltCheck.IsChecked = rule.Hotkey.Alt;
+        ShiftCheck.IsChecked = rule.Hotkey.Shift;
+        WinCheck.IsChecked = rule.Hotkey.Windows;
+        HotkeyText.Text = rule.Hotkey.Key;
+
+        UseProgramCheck.IsChecked = !string.IsNullOrWhiteSpace(rule.LaunchExecutablePath);
+        LaunchPathText.Text = rule.LaunchExecutablePath;
+        WatchProcessText.Text = rule.WatchProcessName;
+
+        UseAccountCheck.IsChecked = rule.AccountProfileId is not null;
+        var profile = CurrentAccountProfile();
+        SessionFilePathText.Text = profile?.SessionFilePath ?? string.Empty;
+        LauncherProcessesText.Text = string.Join(", ", profile?.LauncherProcessNames ?? []);
+        BlockingProcessesText.Text = string.Join(", ", profile?.BlockingProcessNames ?? []);
+
+        UseAudioCheck.IsChecked = !string.IsNullOrWhiteSpace(rule.TargetAudioEndpointId);
+        AudioEndpointCombo.SelectedValue = rule.TargetAudioEndpointId;
+        KeepDeviceRadio.IsChecked = !rule.RestoreAudioOnExit;
+        RestoreDeviceRadio.IsChecked = rule.RestoreAudioOnExit;
+        DeferRestoreCheck.IsChecked = rule.DeferRestoreWhileDiscordInVoice;
+
+        UseDiscordCheck.IsChecked = rule.UseDiscordIntegration;
+        AutoJoinVoiceCheck.IsChecked = rule.AutoJoinVoiceChannel;
+        DiscordPathText.Text = rule.DiscordExecutablePath;
+        DiscordProcessText.Text = rule.DiscordProcessName;
+        ApiUrlText.Text = rule.DiscordApiBaseUrl;
+        RpcClientIdText.Text = rule.DiscordRpcClientId;
+        VoiceChannelTargetText.Text = rule.VoiceChannelTarget;
+        ShowSavedDiscordSelection(rule);
+
+        _loadingRule = false;
+        UpdateSectionVisibility();
+        _ = RefreshAccountStatusesAsync();
+    }
+
+    /// <summary>
+    /// 목록을 아직 불러오지 않았어도 지금 무엇이 선택돼 있는지는 보여 줍니다.
+    /// 목록 새로고침을 누르면 실제 이름으로 바뀝니다.
+    /// </summary>
+    private void ShowSavedDiscordSelection(AutomationSettings rule)
+    {
+        if (_guilds.Count == 0 && !string.IsNullOrWhiteSpace(rule.VoiceChannelGuildId))
+        {
+            GuildCombo.ItemsSource = new[] { new DiscordGuild(rule.VoiceChannelGuildId, "저장된 서버") };
+        }
+        else
+        {
+            GuildCombo.ItemsSource = _guilds;
+        }
+        GuildCombo.SelectedValue = rule.VoiceChannelGuildId;
+
+        var channels = ChannelsFor(rule.VoiceChannelGuildId);
+        if (channels.Count == 0 && !string.IsNullOrWhiteSpace(rule.VoiceChannelTarget))
+        {
+            VoiceChannelCombo.ItemsSource = new[]
+            {
+                new DiscordVoiceChannel(rule.VoiceChannelTarget, "저장된 음성채널"),
+            };
+        }
+        else
+        {
+            VoiceChannelCombo.ItemsSource = channels;
+        }
+        VoiceChannelCombo.SelectedValue = rule.VoiceChannelTarget;
+    }
+
+    private IReadOnlyList<DiscordVoiceChannel> ChannelsFor(string guildId) =>
+        !string.IsNullOrWhiteSpace(guildId) && _voiceChannels.TryGetValue(guildId, out var channels)
+            ? channels
+            : [];
+
+    /// <summary>끈 기능의 세부 설정은 감춥니다. 화면이 단순해집니다.</summary>
+    private void UpdateSectionVisibility()
+    {
+        ProgramPanel.Visibility = Visible(UseProgramCheck.IsChecked == true);
+        AccountPanel.Visibility = Visible(UseAccountCheck.IsChecked == true);
+        AudioPanel.Visibility = Visible(UseAudioCheck.IsChecked == true);
+        DiscordPanel.Visibility = Visible(UseDiscordCheck.IsChecked == true);
+        AutoJoinPanel.Visibility = Visible(
+            UseDiscordCheck.IsChecked == true && AutoJoinVoiceCheck.IsChecked == true);
+        // 복원 보류는 실행 전 장치로 되돌릴 때만 의미가 있습니다.
+        DeferRestorePanel.Visibility = Visible(
+            UseAudioCheck.IsChecked == true && RestoreDeviceRadio.IsChecked == true);
+    }
+
+    private static Visibility Visible(bool shown) => shown ? Visibility.Visible : Visibility.Collapsed;
+
+    private void FeatureToggle_Changed(object sender, RoutedEventArgs e)
+    {
+        if (!_loadingRule)
+        {
+            UpdateSectionVisibility();
+            if (ReferenceEquals(sender, UseAccountCheck))
+            {
+                _ = RefreshAccountStatusesAsync();
+            }
+        }
     }
 
     /// <summary>폼에 입력된 값을 편집 중이던 규칙에 되받습니다.</summary>
@@ -768,7 +684,7 @@ public partial class MainWindow : Window
             Hotkey = new HotkeyGesture(true, true, true, false, string.Empty),
             AccountProfileId = null,
         });
-        RefreshRuleCombo(_rules.Count - 1);
+        RefreshRuleList(_rules.Count - 1);
     }
 
     private void DeleteAutomationRule_Click(object sender, RoutedEventArgs e)
@@ -789,45 +705,8 @@ public partial class MainWindow : Window
         }
 
         _rules.RemoveAt(_editingRule);
-        RefreshRuleCombo(Math.Max(0, _editingRule - 1));
+        RefreshRuleList(Math.Max(0, _editingRule - 1));
     }
-
-    private void ClearAccountProfile_Click(object sender, RoutedEventArgs e) =>
-        AccountProfileCombo.SelectedValue = null;
-
-    private void LoadRuleIntoControls(AutomationSettings rule)
-    {
-        _automation = rule;
-        AutomationNameText.Text = _automation.Name;
-        EnabledCheck.IsChecked = _automation.Enabled;
-        CtrlCheck.IsChecked = _automation.Hotkey.Control;
-        AltCheck.IsChecked = _automation.Hotkey.Alt;
-        ShiftCheck.IsChecked = _automation.Hotkey.Shift;
-        WinCheck.IsChecked = _automation.Hotkey.Windows;
-        HotkeyText.Text = _automation.Hotkey.Key;
-        LaunchPathText.Text = _automation.LaunchExecutablePath;
-        WatchProcessText.Text = _automation.WatchProcessName;
-        UseDiscordCheck.IsChecked = _automation.UseDiscordIntegration;
-        DiscordPathText.Text = _automation.DiscordExecutablePath;
-        DiscordProcessText.Text = _automation.DiscordProcessName;
-        ApiUrlText.Text = _automation.DiscordApiBaseUrl;
-        AccountProfileCombo.ItemsSource = _appSettings.AccountProfiles;
-        AccountProfileCombo.SelectedValue = _automation.AccountProfileId;
-        AutoJoinVoiceCheck.IsChecked = _automation.AutoJoinVoiceChannel;
-        VoiceChannelTargetText.Text = _automation.VoiceChannelTarget;
-        RpcClientIdText.Text = _automation.DiscordRpcClientId;
-        RestoreAudioCheck.IsChecked = _automation.RestoreAudioOnExit;
-        DeferRestoreCheck.IsChecked = _automation.DeferRestoreWhileDiscordInVoice;
-        UpdateRestorePolicyEnabled();
-    }
-
-    /// <summary>복원 보류는 자동 복원과 Discord 연동을 모두 켠 경우에만 의미가 있습니다.</summary>
-    private void UpdateRestorePolicyEnabled() =>
-        DeferRestoreCheck.IsEnabled =
-            RestoreAudioCheck.IsChecked == true && UseDiscordCheck.IsChecked == true;
-
-    private void RestoreAudioCheck_Changed(object sender, RoutedEventArgs e) =>
-        UpdateRestorePolicyEnabled();
 
     private async Task RefreshAudioEndpointsAsync()
     {
@@ -842,7 +721,9 @@ public partial class MainWindow : Window
     {
         Id = _automation.Id,
         Name = AutomationNameText.Text.Trim(),
-        AccountProfileId = AccountProfileCombo.SelectedValue as Guid?,
+        AccountProfileId = UseAccountCheck.IsChecked == true
+            ? _automation.AccountProfileId ?? EnsureAccountProfile().Id
+            : null,
         Enabled = EnabledCheck.IsChecked == true,
         Hotkey = new HotkeyGesture(
             CtrlCheck.IsChecked == true,
@@ -850,21 +731,379 @@ public partial class MainWindow : Window
             ShiftCheck.IsChecked == true,
             WinCheck.IsChecked == true,
             HotkeyText.Text.Trim()),
-        LaunchExecutablePath = LaunchPathText.Text.Trim(),
-        WatchProcessName = WindowsProcessService.NormalizeProcessName(WatchProcessText.Text),
+        LaunchExecutablePath = UseProgramCheck.IsChecked == true ? LaunchPathText.Text.Trim() : string.Empty,
+        WatchProcessName = UseProgramCheck.IsChecked == true
+            ? WindowsProcessService.NormalizeProcessName(WatchProcessText.Text)
+            : string.Empty,
         UseDiscordIntegration = UseDiscordCheck.IsChecked == true,
         DiscordExecutablePath = DiscordPathText.Text.Trim(),
         DiscordProcessName = WindowsProcessService.NormalizeProcessName(DiscordProcessText.Text),
-        TargetAudioEndpointId = AudioEndpointCombo.SelectedValue as string ?? string.Empty,
+        TargetAudioEndpointId = UseAudioCheck.IsChecked == true
+            ? AudioEndpointCombo.SelectedValue as string ?? string.Empty
+            : string.Empty,
         DiscordApiBaseUrl = ApiUrlText.Text.Trim(),
         AutoJoinVoiceChannel = AutoJoinVoiceCheck.IsChecked == true,
-        VoiceChannelTarget = VoiceChannelTargetText.Text.Trim(),
+        VoiceChannelTarget = VoiceChannelCombo.SelectedValue as string
+            ?? VoiceChannelTargetText.Text.Trim(),
+        VoiceChannelGuildId = GuildCombo.SelectedValue as string ?? _automation.VoiceChannelGuildId,
         DiscordRpcClientId = RpcClientIdText.Text.Trim(),
-        RestoreAudioOnExit = RestoreAudioCheck.IsChecked == true,
+        RestoreAudioOnExit = RestoreDeviceRadio.IsChecked == true,
         DeferRestoreWhileDiscordInVoice = DeferRestoreCheck.IsChecked == true,
         ProcessPollInterval = TimeSpan.FromSeconds(1),
         RestorePollInterval = TimeSpan.FromSeconds(5),
     };
+
+    /// <summary>선택한 자동화가 쓰는 계정 프로필입니다. 없으면 null입니다.</summary>
+    private GameAccountProfile? CurrentAccountProfile() =>
+        _automation.AccountProfileId is { } id
+            ? _appSettings.AccountProfiles.FirstOrDefault(profile => profile.Id == id)
+            : null;
+
+    /// <summary>
+    /// 계정 로그인을 켜면 프로필이 필요합니다. 이미 있으면 그대로 쓰고, 없으면 다른
+    /// 자동화가 쓰는 프로필의 경로와 프로세스 이름을 본떠 새로 만듭니다. 특정 게임
+    /// 경로를 코드에 넣지 않기 위해 값은 모두 기존 설정에서 가져옵니다.
+    /// </summary>
+    private GameAccountProfile EnsureAccountProfile()
+    {
+        if (CurrentAccountProfile() is { } existing)
+        {
+            return existing;
+        }
+
+        var template = _appSettings.AccountProfiles.FirstOrDefault();
+        var created = new GameAccountProfile
+        {
+            Name = string.IsNullOrWhiteSpace(_automation.Name) ? "새 계정" : _automation.Name,
+            SessionFilePath = template?.SessionFilePath ?? string.Empty,
+            LauncherProcessNames = [.. template?.LauncherProcessNames ?? []],
+            BlockingProcessNames = [.. template?.BlockingProcessNames ?? []],
+        };
+        _appSettings = _appSettings with
+        {
+            AccountProfiles = [.. _appSettings.AccountProfiles, created],
+        };
+        _automation = _automation with { AccountProfileId = created.Id };
+        return created;
+    }
+
+    /// <summary>등록 상태를 확인해 계정 칸에 보여 줍니다.</summary>
+    private async Task RefreshAccountStatusesAsync()
+    {
+        if (UseAccountCheck.IsChecked != true)
+        {
+            AccountStatusText.Text = "사용 안 함";
+            return;
+        }
+
+        if (CurrentAccountProfile() is not { } profile ||
+            CreateAccountSessionService() is not { } service)
+        {
+            AccountStatusText.Text = "미등록";
+            return;
+        }
+
+        try
+        {
+            var status = await service.GetStatusAsync(profile, CancellationToken.None);
+            AccountStatusText.Text = status switch
+            {
+                GameAccountProfileStatus.Enrolled => "등록됨",
+                GameAccountProfileStatus.NeedsReenrollment => "재등록 필요",
+                _ => "미등록",
+            };
+        }
+        catch (Exception exception)
+        {
+            AccountStatusText.Text = "확인 실패";
+            _logger?.Error("account-status-failed", exception, "등록 상태를 확인하지 못했습니다.");
+        }
+    }
+
+    private async void CaptureAccountSession_Click(object sender, RoutedEventArgs e)
+    {
+        if (CreateAccountSessionService() is not { } service)
+        {
+            return;
+        }
+
+        try
+        {
+            var profile = ReadAccountProfileFromControls(EnsureAccountProfile());
+            SaveAccountProfile(profile);
+            var captured = await service.CaptureAsync(profile, CancellationToken.None);
+            await PersistAccountChangesAsync();
+            await RefreshAccountStatusesAsync();
+            MessageBox.Show(
+                captured
+                    ? "지금 로그인된 계정을 이 자동화에 등록했습니다."
+                    : "로그인된 계정을 찾지 못했습니다. 게임 런처에 로그인한 뒤 다시 시도하세요.",
+                "계정 로그인");
+        }
+        catch (Exception exception)
+        {
+            _logger?.Error("account-capture-failed", exception, "계정 등록에 실패했습니다.");
+            MessageBox.Show(exception.Message, "계정 로그인", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+    }
+
+    /// <summary>
+    /// 자동화가 실행 중일 때 계정 단축키가 쓰는 전환 경로를 그대로 부릅니다.
+    /// 키 입력을 흉내 내지 않고, 오디오와 Discord도 건드리지 않습니다.
+    /// </summary>
+    private async void SwitchToAccount_Click(object sender, RoutedEventArgs e)
+    {
+        if (_engine is null || CurrentAccountProfile() is not { } profile)
+        {
+            MessageBox.Show(
+                "먼저 이 자동화를 저장하고 현재 로그인 계정을 등록하세요.",
+                "계정 로그인");
+            return;
+        }
+
+        try
+        {
+            var result = await _engine.SwitchAccountAsync(profile, CancellationToken.None);
+            await RefreshAccountStatusesAsync();
+            MessageBox.Show(
+                result.Started ? "이 계정으로 전환했습니다." : result.Reason ?? "계정을 전환하지 않았습니다.",
+                "계정 로그인");
+        }
+        catch (Exception exception)
+        {
+            _logger?.Error("account-switch-failed", exception, "계정 전환에 실패했습니다.");
+            MessageBox.Show(exception.Message, "계정 로그인", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+    }
+
+    /// <summary>
+    /// 다른 계정을 등록할 수 있게 로그인 화면까지 열어 줍니다. 지금 로그인된 계정은
+    /// 먼저 회수해 두고, 런처의 로그아웃 명령은 쓰지 않습니다.
+    /// </summary>
+    private async void OpenOtherAccountSignIn_Click(object sender, RoutedEventArgs e)
+    {
+        if (CreateAccountSessionService() is not { } service)
+        {
+            return;
+        }
+
+        var profile = CurrentAccountProfile() ?? _appSettings.AccountProfiles.FirstOrDefault();
+        if (profile is null)
+        {
+            MessageBox.Show("먼저 현재 로그인 계정을 한 번 등록하세요.", "계정 로그인");
+            return;
+        }
+
+        try
+        {
+            var result = await service.PrepareForNewSignInAsync(profile, CancellationToken.None);
+            await RefreshAccountStatusesAsync();
+            if (!result.CanContinue)
+            {
+                MessageBox.Show(result.Message ?? "로그인 화면을 열지 못했습니다.", "계정 로그인");
+                return;
+            }
+
+            if (string.IsNullOrWhiteSpace(_automation.LaunchExecutablePath))
+            {
+                MessageBox.Show(
+                    "로그인되지 않은 상태로 만들었습니다. 실행 파일이 없어 런처는 직접 실행해 주세요.",
+                    "계정 로그인");
+                return;
+            }
+
+            await _processes.StartAsync(_automation.LaunchExecutablePath, CancellationToken.None);
+            MessageBox.Show(
+                "로그인 화면을 열었습니다. 다른 계정으로 로그인한 뒤 그 자동화에서 현재 로그인 계정 등록을 누르세요.",
+                "계정 로그인");
+        }
+        catch (Exception exception)
+        {
+            _logger?.Error("account-signin-open-failed", exception, "로그인 화면을 열지 못했습니다.");
+            MessageBox.Show(exception.Message, "계정 로그인", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+    }
+
+    /// <summary>고급 칸에 입력된 경로와 프로세스 이름을 프로필에 반영합니다.</summary>
+    private GameAccountProfile ReadAccountProfileFromControls(GameAccountProfile profile) => profile with
+    {
+        Name = string.IsNullOrWhiteSpace(_automation.Name) ? profile.Name : _automation.Name,
+        SessionFilePath = SessionFilePathText.Text.Trim(),
+        LauncherProcessNames = SplitNames(LauncherProcessesText.Text),
+        BlockingProcessNames = SplitNames(BlockingProcessesText.Text),
+    };
+
+    private static List<string> SplitNames(string value) =>
+        [.. value.Split(',', StringSplitOptions.RemoveEmptyEntries | StringSplitOptions.TrimEntries)];
+
+    private void SaveAccountProfile(GameAccountProfile profile) =>
+        _appSettings = _appSettings with
+        {
+            AccountProfiles = [.. _appSettings.AccountProfiles
+                .Where(existing => existing.Id != profile.Id)
+                .Append(profile)],
+        };
+
+    /// <summary>계정 프로필 변경만 조용히 저장합니다. 자동화 저장과 별개입니다.</summary>
+    private async Task PersistAccountChangesAsync()
+    {
+        if (_settingsStore is not null)
+        {
+            await _settingsStore.SaveAsync(_appSettings, CancellationToken.None);
+        }
+    }
+
+    /// <summary>
+    /// 현재 자동화를 본떠 새 자동화를 만듭니다. 실행 환경은 복사하되 단축키와 계정
+    /// 로그인은 가져오지 않습니다. 같은 단축키가 둘이 되거나 한 계정을 두 자동화가
+    /// 나눠 쓰는 일을 막기 위해 꺼진 상태로 만듭니다.
+    /// </summary>
+    private void DuplicateAutomationRule_Click(object sender, RoutedEventArgs e)
+    {
+        if (_rules.Count == 0)
+        {
+            return;
+        }
+
+        CommitEditingRule();
+        var source = _rules[_editingRule];
+        _rules.Add(source with
+        {
+            Id = Guid.NewGuid(),
+            Name = $"{source.Name} 복사본",
+            Enabled = false,
+            Hotkey = new HotkeyGesture(true, true, true, false, string.Empty),
+            AccountProfileId = null,
+        });
+        RefreshRuleList(_rules.Count - 1);
+        MessageBox.Show(
+            "복제했습니다. 단축키를 정하고 필요하면 계정 로그인을 등록한 뒤 사용을 켜세요.",
+            "자동화");
+    }
+
+    /// <summary>
+    /// 서버 목록은 로컬 Discord가 알려 주고, 그중 봇도 들어가 있는 것만 남깁니다.
+    /// 봇은 이름을 주고받지 않으므로 이름은 로컬에서 가져온 것을 그대로 씁니다.
+    /// </summary>
+    private async void RefreshDiscordLists_Click(object sender, RoutedEventArgs e) =>
+        await LoadDiscordListsAsync(force: true);
+
+    private async void GuildCombo_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+    {
+        if (_loadingRule || GuildCombo.SelectedValue is not string guildId)
+        {
+            return;
+        }
+        await LoadVoiceChannelsAsync(guildId);
+    }
+
+    private async Task LoadDiscordListsAsync(bool force)
+    {
+        if (_secretStore is null)
+        {
+            return;
+        }
+
+        var client = EnsureRpcVoiceClient(_automation);
+        if (client is null)
+        {
+            DiscordListStatusText.Text = "Discord 연동을 먼저 켜세요.";
+            return;
+        }
+
+        DiscordListStatusText.Text = "불러오는 중...";
+        try
+        {
+            var connection = await client.EnsureConnectedAsync(CancellationToken.None);
+            if (connection.Status != DiscordRpcStatus.Connected)
+            {
+                DiscordListStatusText.Text = DescribeRpcFailure(connection);
+                return;
+            }
+
+            if (force || _guilds.Count == 0)
+            {
+                var local = await client.GetGuildsAsync(CancellationToken.None);
+                var token = await _secretStore.LoadDiscordApiTokenAsync(CancellationToken.None) ?? string.Empty;
+                using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
+                var intersection = await new DiscordGuildIntersectionClient(
+                        http,
+                        _automation.DiscordApiBaseUrl,
+                        token)
+                    .IntersectAsync([.. local.Select(guild => guild.Id)], CancellationToken.None);
+
+                if (intersection.Status != GuildIntersectionStatus.Ok)
+                {
+                    // 준비 중인 것을 "서버 없음"으로 확정하면 고를 것이 없다고 오해합니다.
+                    DiscordListStatusText.Text = intersection.Error ?? "서버 목록을 불러오지 못했습니다.";
+                    return;
+                }
+
+                var shared = intersection.GuildIds.ToHashSet(StringComparer.Ordinal);
+                _guilds.Clear();
+                _guilds.AddRange(local.Where(guild => shared.Contains(guild.Id)));
+                _voiceChannels.Clear();
+            }
+
+            GuildCombo.ItemsSource = null;
+            GuildCombo.ItemsSource = _guilds;
+            GuildCombo.SelectedValue = _automation.VoiceChannelGuildId;
+            DiscordListStatusText.Text = _guilds.Count == 0
+                ? "OneKey 봇과 함께 있는 서버가 없습니다. 봇을 서버에 초대한 뒤 다시 불러오세요."
+                : $"서버 {_guilds.Count}개를 불러왔습니다.";
+
+            if (GuildCombo.SelectedValue is string guildId)
+            {
+                await LoadVoiceChannelsAsync(guildId);
+            }
+        }
+        catch (Exception exception)
+        {
+            _logger?.Error("discord-lists-failed", exception, "Discord 목록을 불러오지 못했습니다.");
+            DiscordListStatusText.Text = "Discord 목록을 불러오지 못했습니다. 잠시 후 다시 불러오세요.";
+        }
+    }
+
+    private async Task LoadVoiceChannelsAsync(string guildId)
+    {
+        var client = EnsureRpcVoiceClient(_automation);
+        if (client is null || string.IsNullOrWhiteSpace(guildId))
+        {
+            return;
+        }
+
+        try
+        {
+            if (!_voiceChannels.TryGetValue(guildId, out var channels))
+            {
+                channels = await client.GetVoiceChannelsAsync(guildId, CancellationToken.None);
+                _voiceChannels[guildId] = channels;
+            }
+
+            var previous = _automation.VoiceChannelTarget;
+            VoiceChannelCombo.ItemsSource = null;
+            VoiceChannelCombo.ItemsSource = channels;
+            VoiceChannelCombo.SelectedValue = previous;
+            if (channels.Count == 0)
+            {
+                DiscordListStatusText.Text = "이 서버에서 볼 수 있는 음성채널이 없습니다.";
+            }
+        }
+        catch (Exception exception)
+        {
+            _logger?.Error("discord-channels-failed", exception, "음성채널 목록을 불러오지 못했습니다.");
+            DiscordListStatusText.Text = "음성채널 목록을 불러오지 못했습니다. 잠시 후 다시 불러오세요.";
+        }
+    }
+
+    /// <summary>
+    /// 아직 테스트 사용자로 등록되지 않은 계정은 Discord가 승인을 거부합니다.
+    /// 기술 오류 대신 무엇을 해야 하는지 알려 줍니다.
+    /// </summary>
+    private static string DescribeRpcFailure(DiscordRpcConnection connection) =>
+        connection.Status == DiscordRpcStatus.NotAuthorized
+            ? "이 Discord 계정은 아직 OneKey 테스트 사용자로 등록되지 않았습니다. 앱 관리자에게 테스트 사용자 등록을 요청하세요."
+            : connection.Error ?? "Discord에 연결하지 못했습니다. Discord를 실행한 뒤 다시 시도하세요.";
 
     private async void SaveSettings_Click(object sender, RoutedEventArgs e)
     {
@@ -898,7 +1137,7 @@ public partial class MainWindow : Window
             await _settingsStore.SaveAsync(_appSettings, CancellationToken.None);
             _logger?.Info("settings-saved", "자동화 규칙을 저장하고 다시 적용했습니다.");
             await StartRuntimeAsync();
-            RefreshRuleCombo(_editingRule);
+            RefreshRuleList(_editingRule);
             UpdateStatus();
             MessageBox.Show("자동화 규칙을 저장했습니다.", "eslee OneKey");
         }
@@ -1115,15 +1354,36 @@ public partial class MainWindow : Window
         {
             return;
         }
-        AutomationNameStatus.Text = _automation.Name;
-        EnabledStatus.Text = _automation.Enabled ? "활성" : "비활성";
         var state = _engine?.State ?? AutomationState.Idle;
-        StateStatus.Text = AutomationStatusText.ForState(
+        var stateText = AutomationStatusText.ForState(
             state,
             WaitsForDiscordVoice,
             _engine?.KeptCurrentDevice ?? false);
-        LastRunStatus.Text = _engine?.LastRunAt?.ToLocalTime().ToString("yyyy-MM-dd HH:mm:ss") ?? "없음";
-        LastErrorStatus.Text = _engine?.LastError ?? _coordinator?.LastError ?? "없음";
+        GlobalStateText.Text = _paused ? $"일시정지 · {stateText}" : stateText;
+        LastRunStatus.Text = _engine?.LastRunAt is { } run
+            ? $"마지막 실행 {run.ToLocalTime():HH:mm:ss}"
+            : string.Empty;
+
+        var error = _engine?.LastError ?? _coordinator?.LastError;
+        LastErrorStatus.Text = error ?? string.Empty;
+        LastErrorStatus.Visibility = Visible(!string.IsNullOrWhiteSpace(error));
+
+        // 실행 중이거나 복원을 기다릴 때만 비상용 수동 제어를 보여 줍니다.
+        var running = state is AutomationState.Active
+            or AutomationState.Starting
+            or AutomationState.RestorePending
+            or AutomationState.Restoring;
+        ManualRestoreButton.Visibility = Visible(running);
+        KeepCurrentButton.Visibility = Visible(running);
+
+        // 지금 돌고 있는 자동화만 목록에서 상태를 보여 줍니다.
+        var activeId = _engine?.ActiveRule.Id;
+        foreach (var item in _ruleItems)
+        {
+            item.StateText = !item.Enabled
+                ? "사용 안 함"
+                : item.Id == activeId && running ? stateText : "대기 중";
+        }
         _tray?.SetRestorePending(state == AutomationState.RestorePending);
     }
 
