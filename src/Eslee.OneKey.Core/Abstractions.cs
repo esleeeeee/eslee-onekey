@@ -40,6 +40,15 @@ public sealed record DiscordRpcConnection(DiscordRpcStatus Status, string? Error
 public interface IDiscordVoiceChannelClient
 {
     Task<DiscordRpcConnection> ConnectAsync(CancellationToken cancellationToken);
+
+    /// <summary>
+    /// 이미 연결돼 있으면 그대로 씁니다. 끊긴 경우에만 다시 연결합니다. Discord는 연결을
+    /// 끊은 직후 한동안 새 연결을 거부하므로, 주기적인 조회가 매번 다시 연결하면 안 됩니다.
+    /// </summary>
+    Task<DiscordRpcConnection> EnsureConnectedAsync(CancellationToken cancellationToken);
+
+    /// <summary>연결만 끊습니다. 다음 요청에서 다시 연결할 수 있습니다.</summary>
+    Task DisconnectAsync(CancellationToken cancellationToken);
     Task<string?> GetSelectedVoiceChannelIdAsync(CancellationToken cancellationToken);
     Task SelectVoiceChannelAsync(string channelId, CancellationToken cancellationToken);
 }
