@@ -161,3 +161,7 @@ See [Architecture](docs/ARCHITECTURE.md), [API contract](docs/API_CONTRACT.md), 
 - Changing the Windows default audio device has no public API, so the app uses the `PolicyConfig` COM interface. Each Windows update warrants a check on real hardware.
 - Discord only reports the voice channels you can see, not whether you may connect, so a channel you lack permission for is refused at join time.
 - Automatic updates, code signing, and an installer are not provided yet.
+
+## License
+
+[MIT License](LICENSE)
