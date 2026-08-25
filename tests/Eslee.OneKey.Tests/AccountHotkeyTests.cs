@@ -134,12 +134,15 @@ internal sealed class FakeGameSessionService : IGameSessionService
     public Task<bool> CaptureAsync(GameAccountProfile profile, CancellationToken cancellationToken) =>
         Task.FromResult(true);
 
+    /// <summary>런처 실행 파일이 사라진 경우처럼 예외가 터지는 상황을 만듭니다.</summary>
+    public Exception? Throws { get; set; }
+
     public Task<GameSessionResult> ActivateAsync(
         GameAccountProfile profile,
         CancellationToken cancellationToken)
     {
         Activated.Add(profile.Id);
-        return Task.FromResult(Result);
+        return Throws is null ? Task.FromResult(Result) : Task.FromException<GameSessionResult>(Throws);
     }
 
     public Task<bool> HasStoredSessionAsync(Guid profileId, CancellationToken cancellationToken) =>
