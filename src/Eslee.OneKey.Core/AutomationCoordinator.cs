@@ -40,10 +40,16 @@ public sealed class AutomationCoordinator : IAsyncDisposable
         _processMonitor.ProcessStarted += HandleProcessStartedAsync;
         _processMonitor.ProcessExited += HandleProcessExitedAsync;
 
-        var registration = await _hotkey.RegisterAsync(_settings.Hotkey, cancellationToken);
-        if (!registration.Succeeded)
+        // 계정 프로필이 같은 조합을 쓰면 그쪽이 더 구체적이므로 기본 단축키는 등록하지
+        // 않는다. 같은 조합을 두 번 등록하면 Windows가 충돌로 거부한다.
+        var claimedByAccount = _accountHotkeys.Any(account => account.Profile.Hotkey == _settings.Hotkey);
+        if (!claimedByAccount)
         {
-            LastError = registration.Error ?? "전역 단축키 등록에 실패했습니다.";
+            var registration = await _hotkey.RegisterAsync(_settings.Hotkey, cancellationToken);
+            if (!registration.Succeeded)
+            {
+                LastError = registration.Error ?? "전역 단축키 등록에 실패했습니다.";
+            }
         }
 
         foreach (var account in _accountHotkeys)

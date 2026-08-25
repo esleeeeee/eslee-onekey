@@ -205,6 +205,84 @@
                 </ScrollViewer>
             </TabItem>
 
+            <TabItem Header="계정">
+                <ScrollViewer VerticalScrollBarVisibility="Auto">
+                    <StackPanel Margin="24">
+                        <TextBlock Text="게임 계정 프로필" FontSize="18" FontWeight="SemiBold" />
+                        <TextBlock TextWrapping="Wrap" Foreground="#69677A" Margin="0,6,0,4"
+                                   Text="단축키마다 다른 계정으로 자동화를 시작합니다. 아이디와 비밀번호는 저장하지 않고, 런처가 이미 보관하는 로그인 세션만 프로필별로 나눠 둡니다. 세션은 DPAPI로 암호화되어 설정 파일이나 로그에는 남지 않습니다." />
+
+                        <Border Background="#FFF6E5" CornerRadius="8" Padding="14" Margin="0,10,0,14">
+                            <StackPanel>
+                                <TextBlock Text="최초 등록 순서" FontWeight="SemiBold" Margin="0,0,0,6" />
+                                <TextBlock TextWrapping="Wrap" Text="1. 원하는 계정으로 런처에 직접 로그인합니다 (로그인 상태 유지 켜기)." />
+                                <TextBlock TextWrapping="Wrap" Text="2. 아래에서 그 프로필의 [현재 세션 저장]을 누릅니다." />
+                                <TextBlock TextWrapping="Wrap" Text="3. 런처를 종료합니다." />
+                                <TextBlock TextWrapping="Wrap" Text="4. [다음 계정 로그인 준비]를 누릅니다. 런처의 로그아웃 버튼은 절대 쓰지 마세요." />
+                                <TextBlock TextWrapping="Wrap" Text="5. 런처를 실행해 다음 계정으로 직접 로그인합니다." />
+                                <TextBlock TextWrapping="Wrap" Text="6. 그 프로필의 [현재 세션 저장]을 누릅니다." />
+                                <TextBlock TextWrapping="Wrap" Foreground="#A12828" Margin="0,6,0,0"
+                                           Text="런처에서 로그아웃하면 서버가 저장해 둔 세션을 폐기해 이미 등록한 계정까지 다시 등록해야 합니다." />
+                            </StackPanel>
+                        </Border>
+
+                        <TextBlock TextWrapping="Wrap" Foreground="#69677A" Margin="0,0,0,12"
+                                   Text="설정 탭의 기본 단축키와 같은 조합을 쓰면 그 조합은 계정 프로필이 가져갑니다. 같은 조합을 두 번 등록할 수 없기 때문이며, 자동화 동작은 그대로입니다." />
+
+                        <ItemsControl x:Name="AccountProfileList">
+                            <ItemsControl.ItemTemplate>
+                                <DataTemplate>
+                                    <Border BorderBrush="#DDDDE8" BorderThickness="1" CornerRadius="8"
+                                            Padding="14" Margin="0,0,0,12">
+                                        <StackPanel>
+                                            <StackPanel Orientation="Horizontal">
+                                                <TextBlock Text="이름" VerticalAlignment="Center" Width="110" />
+                                                <TextBox Text="{Binding Name, UpdateSourceTrigger=PropertyChanged}" Width="200" />
+                                                <TextBlock Text="상태" VerticalAlignment="Center" Width="60" Margin="18,0,0,0" />
+                                                <TextBlock Text="{Binding Status}" VerticalAlignment="Center" FontWeight="SemiBold" />
+                                            </StackPanel>
+                                            <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+                                                <TextBlock Text="단축키" VerticalAlignment="Center" Width="110" />
+                                                <CheckBox Content="Ctrl" Margin="8" IsChecked="{Binding Control}" />
+                                                <CheckBox Content="Alt" Margin="8" IsChecked="{Binding Alt}" />
+                                                <CheckBox Content="Shift" Margin="8" IsChecked="{Binding Shift}" />
+                                                <CheckBox Content="Win" Margin="8" IsChecked="{Binding Windows}" />
+                                                <TextBox Width="65" MaxLength="3" Text="{Binding Key, UpdateSourceTrigger=PropertyChanged}" />
+                                            </StackPanel>
+                                            <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+                                                <TextBlock Text="세션 파일" VerticalAlignment="Center" Width="110" />
+                                                <TextBox Width="420" Text="{Binding SessionFilePath, UpdateSourceTrigger=PropertyChanged}" />
+                                                <Button Content="찾기" Click="BrowseSessionFile_Click" Tag="{Binding}" />
+                                            </StackPanel>
+                                            <StackPanel Orientation="Horizontal" Margin="0,6,0,0">
+                                                <TextBlock Text="런처 프로세스" VerticalAlignment="Center" Width="110" />
+                                                <TextBox Width="200" Text="{Binding LauncherProcesses, UpdateSourceTrigger=PropertyChanged}" />
+                                                <TextBlock Text="게임 프로세스" VerticalAlignment="Center" Width="100" Margin="18,0,0,0" />
+                                                <TextBox Width="200" Text="{Binding BlockingProcesses, UpdateSourceTrigger=PropertyChanged}" />
+                                            </StackPanel>
+                                            <WrapPanel Margin="0,8,0,0">
+                                                <Button Content="현재 세션 저장" Click="CaptureAccountSession_Click" Tag="{Binding}"
+                                                        Background="#6D5DFB" Foreground="White" />
+                                                <Button Content="세션 다시 등록" Click="ReenrollAccountSession_Click" Tag="{Binding}" />
+                                                <Button Content="프로필 삭제" Click="DeleteAccountProfile_Click" Tag="{Binding}" />
+                                            </WrapPanel>
+                                        </StackPanel>
+                                    </Border>
+                                </DataTemplate>
+                            </ItemsControl.ItemTemplate>
+                        </ItemsControl>
+
+                        <WrapPanel Margin="0,4,0,0">
+                            <Button Content="프로필 추가" Click="AddAccountProfile_Click" />
+                            <Button Content="다음 계정 로그인 준비" Click="PrepareNewSignIn_Click" />
+                            <Button Content="상태 새로고침" Click="RefreshAccountStatus_Click" />
+                            <Button Content="계정 설정 저장" Click="SaveAccountProfiles_Click"
+                                    Background="#6D5DFB" Foreground="White" />
+                        </WrapPanel>
+                    </StackPanel>
+                </ScrollViewer>
+            </TabItem>
+
             <TabItem Header="정보">
                 <StackPanel Margin="24">
                     <TextBlock x:Name="VersionText" Text="eslee OneKey" FontSize="20" FontWeight="SemiBold" />

@@ -1,3 +1,4 @@
+using System.Collections.ObjectModel;
 using System.ComponentModel;
 using System.Diagnostics;
 using System.IO;
@@ -21,6 +22,7 @@ public partial class MainWindow : Window
     private readonly CoreAudioEndpointService _audio = new();
     private readonly WindowsProcessService _processes = new();
     private readonly StartupRegistrationService _startup = new();
+    private readonly ObservableCollection<AccountProfileViewModel> _accountProfiles = [];
     private JsonSettingsStore? _settingsStore;
     private JsonSessionStore? _sessionStore;
     private DpapiSecretStore? _secretStore;
@@ -89,6 +91,7 @@ public partial class MainWindow : Window
             _automation = _appSettings.Automations.FirstOrDefault() ?? new AutomationSettings();
             ApplySettingsToControls();
             await RefreshRpcStatusAsync();
+            await RefreshAccountStatusesAsync();
             await RefreshAudioEndpointsAsync();
             await StartRuntimeAsync();
             UpdateStatus();
@@ -276,6 +279,206 @@ public partial class MainWindow : Window
         }
     }
 
+    private void LoadAccountProfilesIntoControls()
+    {
+        _accountProfiles.Clear();
+        foreach (var profile in _appSettings.AccountProfiles)
+        {
+            _accountProfiles.Add(new AccountProfileViewModel(profile));
+        }
+        AccountProfileList.ItemsSource = _accountProfiles;
+    }
+
+    private static AccountProfileViewModel? ProfileOf(object sender) =>
+        (sender as FrameworkElement)?.Tag as AccountProfileViewModel;
+
+    /// <summary>등록 상태는 저장된 세션 유무와 런처의 거부 여부로 결정됩니다.</summary>
+    private async Task RefreshAccountStatusesAsync()
+    {
+        var service = CreateAccountSessionService();
+        if (service is null)
+        {
+            return;
+        }
+
+        foreach (var viewModel in _accountProfiles)
+        {
+            try
+            {
+                var status = await service.GetStatusAsync(viewModel.ToProfile(), CancellationToken.None);
+                viewModel.Status = AccountProfileViewModel.Describe(status);
+            }
+            catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+            {
+                viewModel.Status = "확인 실패";
+            }
+        }
+    }
+
+    private async void RefreshAccountStatus_Click(object sender, RoutedEventArgs e) =>
+        await RefreshAccountStatusesAsync();
+
+    private void AddAccountProfile_Click(object sender, RoutedEventArgs e)
+    {
+        var template = _accountProfiles.LastOrDefault();
+        _accountProfiles.Add(new AccountProfileViewModel
+        {
+            Name = "새 계정",
+            Key = string.Empty,
+            SessionFilePath = template?.SessionFilePath ?? string.Empty,
+            LauncherProcesses = template?.LauncherProcesses ?? string.Empty,
+            BlockingProcesses = template?.BlockingProcesses ?? string.Empty,
+            Status = "미등록",
+        });
+    }
+
+    private void BrowseSessionFile_Click(object sender, RoutedEventArgs e)
+    {
+        if (ProfileOf(sender) is not { } viewModel)
+        {
+            return;
+        }
+
+        var dialog = new OpenFileDialog
+        {
+            Title = "런처 로그인 세션 파일 선택",
+            Filter = "설정 파일 (*.yaml;*.yml;*.json;*.dat)|*.yaml;*.yml;*.json;*.dat|모든 파일 (*.*)|*.*",
+            CheckFileExists = true,
+        };
+        if (dialog.ShowDialog() == true)
+        {
+            viewModel.SessionFilePath = dialog.FileName;
+        }
+    }
+
+    private async void CaptureAccountSession_Click(object sender, RoutedEventArgs e)
+    {
+        if (ProfileOf(sender) is not { } viewModel ||
+            CreateAccountSessionService() is not { } service)
+        {
+            return;
+        }
+
+        try
+        {
+            var captured = await service.CaptureAsync(viewModel.ToProfile(), CancellationToken.None);
+            await RefreshAccountStatusesAsync();
+            MessageBox.Show(
+                captured
+                    ? $"{viewModel.Name} 프로필에 현재 로그인 세션을 저장했습니다."
+                    : "현재 로그인된 세션을 찾지 못했습니다. 런처에 로그인한 뒤 다시 시도하세요.",
+                "계정 프로필");
+        }
+        catch (Exception exception)
+        {
+            _logger?.Error("account-capture-failed", exception, "세션 저장에 실패했습니다.");
+            MessageBox.Show(exception.Message, "계정 프로필", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+    }
+
+    /// <summary>
+    /// 다시 등록은 저장본을 버리고 새로 로그인할 준비까지 해 줍니다. 런처의 로그아웃은
+    /// 쓰지 않습니다. 서버가 세션을 폐기하면 다른 계정의 저장본까지 무효가 되기 때문입니다.
+    /// </summary>
+    private async void ReenrollAccountSession_Click(object sender, RoutedEventArgs e)
+    {
+        if (ProfileOf(sender) is not { } viewModel ||
+            CreateAccountSessionService() is not { } service)
+        {
+            return;
+        }
+
+        var profile = viewModel.ToProfile();
+        await service.ForgetAsync(profile.Id, CancellationToken.None);
+        var result = await service.PrepareForNewSignInAsync(profile, CancellationToken.None);
+        await RefreshAccountStatusesAsync();
+        MessageBox.Show(
+            result.CanContinue
+                ? $"{viewModel.Name} 저장본을 지우고 로그인 준비를 마쳤습니다. 런처를 실행해 이 계정으로 로그인한 뒤 현재 세션 저장을 누르세요."
+                : result.Message ?? "로그인 준비에 실패했습니다.",
+            "계정 프로필");
+    }
+
+    private async void PrepareNewSignIn_Click(object sender, RoutedEventArgs e)
+    {
+        if (_accountProfiles.FirstOrDefault() is not { } first ||
+            CreateAccountSessionService() is not { } service)
+        {
+            return;
+        }
+
+        var result = await service.PrepareForNewSignInAsync(first.ToProfile(), CancellationToken.None);
+        await RefreshAccountStatusesAsync();
+        MessageBox.Show(
+            result.CanContinue
+                ? "로그인되지 않은 상태를 준비했습니다. 런처를 실행해 다음 계정으로 로그인한 뒤 그 프로필의 현재 세션 저장을 누르세요."
+                : result.Message ?? "로그인 준비에 실패했습니다.",
+            "계정 프로필");
+    }
+
+    private async void DeleteAccountProfile_Click(object sender, RoutedEventArgs e)
+    {
+        if (ProfileOf(sender) is not { } viewModel)
+        {
+            return;
+        }
+
+        if (MessageBox.Show(
+                $"{viewModel.Name} 프로필과 저장된 로그인 세션을 삭제할까요?",
+                "계정 프로필",
+                MessageBoxButton.OKCancel,
+                MessageBoxImage.Question) != MessageBoxResult.OK)
+        {
+            return;
+        }
+
+        if (CreateAccountSessionService() is { } service)
+        {
+            await service.ForgetAsync(viewModel.Id, CancellationToken.None);
+        }
+        _accountProfiles.Remove(viewModel);
+    }
+
+    private async void SaveAccountProfiles_Click(object sender, RoutedEventArgs e)
+    {
+        if (_initializationFailed || _settingsStore is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var profiles = _accountProfiles.Select(item => item.ToProfile()).ToList();
+            foreach (var profile in profiles)
+            {
+                if (string.IsNullOrWhiteSpace(profile.Name))
+                {
+                    throw new InvalidOperationException("계정 프로필 이름을 입력하세요.");
+                }
+                if (string.IsNullOrWhiteSpace(profile.Hotkey.Key))
+                {
+                    throw new InvalidOperationException($"{profile.Name}의 단축키를 입력하세요.");
+                }
+                if (string.IsNullOrWhiteSpace(profile.SessionFilePath))
+                {
+                    throw new InvalidOperationException($"{profile.Name}의 세션 파일을 지정하세요.");
+                }
+            }
+
+            _appSettings = _appSettings with { AccountProfiles = profiles };
+            await _settingsStore.SaveAsync(_appSettings, CancellationToken.None);
+            _logger?.Info("account-profiles-saved", "계정 프로필을 저장하고 단축키를 다시 등록했습니다.");
+            await StartRuntimeAsync();
+            await RefreshAccountStatusesAsync();
+            MessageBox.Show("계정 프로필을 저장했습니다.", "계정 프로필");
+        }
+        catch (Exception exception)
+        {
+            _logger?.Error("account-profiles-save-failed", exception, "계정 프로필 저장에 실패했습니다.");
+            MessageBox.Show(exception.Message, "계정 프로필", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+    }
+
     /// <summary>
     /// 계정 프로필별 전역 단축키입니다. 프로필을 추가하면 단축키도 그만큼 늘어나며,
     /// 어느 계정으로 자동화를 시작할지가 단축키로 결정됩니다.
@@ -442,6 +645,7 @@ public partial class MainWindow : Window
         DiscordPathText.Text = _automation.DiscordExecutablePath;
         DiscordProcessText.Text = _automation.DiscordProcessName;
         ApiUrlText.Text = _automation.DiscordApiBaseUrl;
+        LoadAccountProfilesIntoControls();
         AutoJoinVoiceCheck.IsChecked = _automation.AutoJoinVoiceChannel;
         VoiceChannelTargetText.Text = _automation.VoiceChannelTarget;
         RpcClientIdText.Text = _automation.DiscordRpcClientId;
@@ -521,6 +725,8 @@ public partial class MainWindow : Window
                 SchemaVersion = SettingsMigration.CurrentSchemaVersion,
                 StartWithWindows = StartupCheck.IsChecked == true,
                 Automations = [candidate],
+                // 계정 프로필은 계정 탭에서 따로 관리하므로 그대로 유지한다.
+                AccountProfiles = _appSettings.AccountProfiles,
             };
             await _settingsStore.SaveAsync(_appSettings, CancellationToken.None);
             _startup.SetEnabled(
