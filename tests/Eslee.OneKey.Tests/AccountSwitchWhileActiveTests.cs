@@ -146,6 +146,56 @@ public sealed class AccountSwitchWhileActiveTests
     }
 
     [Fact]
+    public async Task AFailedSwitchIsPushedToTheScreen()
+    {
+        var harness = await CreateActiveAsync();
+        harness.Sessions.Result = new GameSessionResult(
+            GameSessionOutcome.BlockedByRunningGame,
+            "게임이 실행 중이라 계정을 전환하지 않았습니다.");
+        var notified = 0;
+        harness.Engine.StateChanged += (_, _) => notified++;
+
+        await harness.Engine.StartOrSwitchAccountAsync(Korea);
+
+        // 상태는 그대로라 알림을 따로 보내지 않으면 사용자는 실패를 보지 못한다.
+        Assert.Equal(1, notified);
+        Assert.Contains("게임이 실행 중", harness.Engine.LastError);
+    }
+
+    [Fact]
+    public async Task AThrownSwitchIsReportedInsteadOfDisappearing()
+    {
+        var harness = await CreateActiveAsync();
+        harness.Sessions.Throws = new FileNotFoundException("런처 실행 파일을 찾을 수 없습니다.");
+        var notified = 0;
+        harness.Engine.StateChanged += (_, _) => notified++;
+
+        var result = await harness.Engine.StartOrSwitchAccountAsync(Korea);
+
+        Assert.False(result.Started);
+        Assert.Contains("런처 실행 파일", harness.Engine.LastError);
+        Assert.Equal(1, notified);
+        // 실행 중인 자동화는 그대로 둔다.
+        Assert.Equal(AutomationState.Active, harness.Engine.State);
+    }
+
+    [Fact]
+    public async Task RestartingTheLauncherDuringASwitchDoesNotEndTheAutomation()
+    {
+        var harness = await CreateActiveAsync();
+        // 감시 대상이 런처와 같은 설정에서는 계정 전환이 종료 이벤트를 부른다.
+        await harness.Engine.StartOrSwitchAccountAsync(Korea);
+        harness.Processes.Running.Add("game");
+        var audioBefore = harness.Audio.SetCalls.Count;
+
+        await harness.Engine.OnWatchedProcessExitedAsync();
+
+        Assert.Equal(AutomationState.Active, harness.Engine.State);
+        Assert.Equal(audioBefore, harness.Audio.SetCalls.Count);
+        Assert.Equal("headset", harness.Audio.DefaultId);
+    }
+
+    [Fact]
     public async Task TheSwitchOnlyPathNeverStartsTheAutomation()
     {
         var harness = Create();

@@ -2,6 +2,9 @@ namespace Eslee.OneKey.Core;
 
 public sealed class AutomationEngine : IAsyncDisposable
 {
+    /// <summary>계정 전환으로 다시 띄운 런처의 종료 이벤트를 무시하는 시간입니다.</summary>
+    private static readonly TimeSpan LauncherRestartGrace = TimeSpan.FromSeconds(30);
+
     private static readonly HashSet<AutomationState> BusyStates =
     [
         AutomationState.Starting,
@@ -19,6 +22,7 @@ public sealed class AutomationEngine : IAsyncDisposable
     private readonly IAppLogger _logger;
     private readonly VoiceChannelAutoJoin? _voiceChannelAutoJoin;
     private readonly IGameSessionService? _accountSessions;
+    private DateTimeOffset? _launcherRestartedAt;
     private readonly SemaphoreSlim _gate = new(1, 1);
 
     /// <summary>
@@ -164,32 +168,52 @@ public sealed class AutomationEngine : IAsyncDisposable
             return AutomationStartResult.Ignored("계정 전환 기능을 쓸 수 없습니다.");
         }
 
-        var result = await ActivateAccountAsync(profile, cancellationToken);
-        if (result.Outcome == GameSessionOutcome.AlreadyActive)
+        try
         {
-            const string reason = "이미 이 계정이라 런처를 다시 시작하지 않았습니다.";
-            _logger.Info("account-already-active", reason);
-            return AutomationStartResult.Ignored(reason);
-        }
+            var result = await ActivateAccountAsync(profile, cancellationToken);
+            if (result.Outcome == GameSessionOutcome.AlreadyActive)
+            {
+                const string reason = "이미 이 계정이라 런처를 다시 시작하지 않았습니다.";
+                _logger.Info("account-already-active", reason);
+                return AutomationStartResult.Ignored(reason);
+            }
 
-        if (result.Outcome != GameSessionOutcome.Switched)
+            if (result.Outcome != GameSessionOutcome.Switched)
+            {
+                // 실행 중인 자동화는 건드리지 않고 실패만 알린다.
+                return FailSwitch(result.Message ?? "계정 전환에 실패했습니다.");
+            }
+
+            LastError = null;
+            await StartLauncherAsync(cancellationToken);
+            var confirmation = await _accountSessions.ConfirmActiveAsync(profile, cancellationToken);
+            if (confirmation.Outcome == GameSessionOutcome.NeedsEnrollment)
+            {
+                return FailSwitch(confirmation.Message ?? "런처가 저장된 세션을 거부했습니다.");
+            }
+
+            _logger.Info("account-switched", "실행 중인 자동화를 유지한 채 계정을 전환했습니다.");
+            RaiseStateChanged();
+            return AutomationStartResult.Success();
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
         {
-            // 실행 중인 자동화는 건드리지 않고 실패만 알린다.
-            LastError = result.Message ?? "계정 전환에 실패했습니다.";
-            return AutomationStartResult.Ignored(LastError);
+            // 런처 실행 파일이 사라졌거나 세션 파일을 읽지 못하는 경우입니다. 실행 중인
+            // 자동화를 끝내지는 않되, 조용히 삼키면 사용자는 전환된 줄 알게 됩니다.
+            _logger.Error("account-switch-failed", exception, "계정 전환에 실패했습니다.");
+            return FailSwitch(exception.Message);
         }
+    }
 
-        LastError = null;
-        await StartLauncherAsync(cancellationToken);
-        var confirmation = await _accountSessions.ConfirmActiveAsync(profile, cancellationToken);
-        if (confirmation.Outcome == GameSessionOutcome.NeedsEnrollment)
-        {
-            LastError = confirmation.Message ?? "런처가 저장된 세션을 거부했습니다.";
-            return AutomationStartResult.Ignored(LastError);
-        }
-
-        _logger.Info("account-switched", "실행 중인 자동화를 유지한 채 계정을 전환했습니다.");
-        return AutomationStartResult.Success();
+    /// <summary>
+    /// 전환 실패를 기록하고 화면에 반영합니다. 자동화 상태는 그대로 두므로 상태 변경
+    /// 알림을 따로 보내지 않으면 사용자는 실패를 영영 보지 못합니다.
+    /// </summary>
+    private AutomationStartResult FailSwitch(string message)
+    {
+        LastError = message;
+        RaiseStateChanged();
+        return AutomationStartResult.Ignored(message);
     }
 
     /// <summary>계정을 바꾼 뒤 런처를 다시 띄웁니다.</summary>
@@ -201,6 +225,7 @@ public sealed class AutomationEngine : IAsyncDisposable
         }
 
         await _processes.StartAsync(_settings.LaunchExecutablePath, cancellationToken);
+        _launcherRestartedAt = _clock.UtcNow;
         _logger.Info("launch-restarted", "계정을 바꾼 뒤 실행 파일을 다시 시작했습니다.");
     }
 
@@ -291,6 +316,21 @@ public sealed class AutomationEngine : IAsyncDisposable
         {
             if (State != AutomationState.Active)
             {
+                return;
+            }
+
+            // 감시 대상이 런처와 같은 설정에서는 계정 전환이 종료 이벤트를 만든다.
+            // 우리가 방금 닫았다 다시 띄운 것이고 지금 살아 있다면 종료가 아니다.
+            // 그러지 않으면 계정 전환이 오디오 복원과 자동화 종료를 불러온다.
+            if (_launcherRestartedAt is { } restartedAt &&
+                _clock.UtcNow - restartedAt < LauncherRestartGrace &&
+                !string.IsNullOrWhiteSpace(_settings.WatchProcessName) &&
+                await _processes.IsRunningAsync(_settings.WatchProcessName, cancellationToken))
+            {
+                _launcherRestartedAt = null;
+                _logger.Info(
+                    "watched-process-restarted-by-switch",
+                    "계정 전환으로 다시 띄운 것이라 종료로 처리하지 않았습니다.");
                 return;
             }
 
