@@ -51,10 +51,18 @@ public sealed record HotkeyGesture(
 
 public sealed record AutomationSettings
 {
+    /// <summary>규칙을 구분하는 값입니다. 이름을 바꿔도 그대로 유지됩니다.</summary>
     public Guid Id { get; init; } = Guid.NewGuid();
+
     public string Name { get; init; } = "새 자동화";
     public bool Enabled { get; init; } = true;
     public HotkeyGesture Hotkey { get; init; } = new();
+
+    /// <summary>
+    /// 이 규칙으로 시작할 때 활성화할 계정 프로필입니다. 비워 두면 계정을 건드리지
+    /// 않습니다. 단축키는 규칙에만 있고 계정 프로필에는 없습니다.
+    /// </summary>
+    public Guid? AccountProfileId { get; init; }
     public string WatchProcessName { get; init; } = string.Empty;
     public string LaunchExecutablePath { get; init; } = string.Empty;
     public bool UseDiscordIntegration { get; init; }
@@ -88,7 +96,7 @@ public sealed record AutomationSettings
 
 public sealed record AppSettings
 {
-    public int SchemaVersion { get; init; } = 4;
+    public int SchemaVersion { get; init; } = 5;
     public bool StartWithWindows { get; init; }
     public List<AutomationSettings> Automations { get; init; } = [new()];
 

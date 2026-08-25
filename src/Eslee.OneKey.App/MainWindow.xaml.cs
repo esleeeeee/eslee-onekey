@@ -29,6 +29,11 @@ public partial class MainWindow : Window
     private FileAppLogger? _logger;
     private AppSettings _appSettings = new();
     private AutomationSettings _automation = new();
+
+    /// <summary>자동화 규칙 전체입니다. 단축키는 규칙에만 있습니다.</summary>
+    private readonly List<AutomationSettings> _rules = [];
+    private int _editingRule = -1;
+    private bool _loadingRule;
     private AutomationEngine? _engine;
     private AutomationCoordinator? _coordinator;
     private HttpClient? _httpClient;
@@ -88,7 +93,13 @@ public partial class MainWindow : Window
             _trayFolderLink.Start();
 
             _appSettings = await _settingsStore.LoadAsync(CancellationToken.None);
-            _automation = _appSettings.Automations.FirstOrDefault() ?? new AutomationSettings();
+            _rules.Clear();
+            _rules.AddRange(_appSettings.Automations);
+            if (_rules.Count == 0)
+            {
+                _rules.Add(new AutomationSettings());
+            }
+            _automation = ActiveRule();
             ApplySettingsToControls();
             await RefreshRpcStatusAsync();
             await RefreshAccountStatusesAsync();
@@ -237,7 +248,7 @@ public partial class MainWindow : Window
             _rpcVoiceClient = null;
         }
 
-        if (!_automation.Enabled ||
+        if (_rules.TrueForAll(rule => !rule.Enabled) ||
             _sessionStore is null ||
             _secretStore is null ||
             _logger is null)
@@ -259,8 +270,10 @@ public partial class MainWindow : Window
             _sessionStore,
             new SystemClock(),
             _logger,
-            CreateVoiceChannelAutoJoin(),
+            CreateVoiceChannelAutoJoin(_automation),
             CreateAccountSessionService());
+        // 규칙마다 Discord 설정이 다를 수 있으므로 규칙이 바뀌면 다시 만든다.
+        _engine.VoiceChannelAutoJoinFactory = CreateVoiceChannelAutoJoin;
         _engine.StateChanged += Engine_StateChanged;
 
         var windowHandle = new WindowInteropHelper(this).Handle;
@@ -271,7 +284,7 @@ public partial class MainWindow : Window
             _engine,
             hotkey,
             monitor,
-            CreateAccountHotkeys(windowHandle));
+            CreateRuleBindings(windowHandle));
         await _coordinator.InitializeAsync();
         if (_coordinator.LastError is not null)
         {
@@ -324,7 +337,6 @@ public partial class MainWindow : Window
         _accountProfiles.Add(new AccountProfileViewModel
         {
             Name = "새 계정",
-            Key = string.Empty,
             SessionFilePath = template?.SessionFilePath ?? string.Empty,
             LauncherProcesses = template?.LauncherProcesses ?? string.Empty,
             BlockingProcesses = template?.BlockingProcesses ?? string.Empty,
@@ -506,10 +518,6 @@ public partial class MainWindow : Window
                 {
                     throw new InvalidOperationException("계정 프로필 이름을 입력하세요.");
                 }
-                if (string.IsNullOrWhiteSpace(profile.Hotkey.Key))
-                {
-                    throw new InvalidOperationException($"{profile.Name}의 단축키를 입력하세요.");
-                }
                 if (string.IsNullOrWhiteSpace(profile.SessionFilePath))
                 {
                     throw new InvalidOperationException($"{profile.Name}의 세션 파일을 지정하세요.");
@@ -518,8 +526,10 @@ public partial class MainWindow : Window
 
             _appSettings = _appSettings with { AccountProfiles = profiles };
             await _settingsStore.SaveAsync(_appSettings, CancellationToken.None);
-            _logger?.Info("account-profiles-saved", "계정 프로필을 저장하고 단축키를 다시 등록했습니다.");
+            _logger?.Info("account-profiles-saved", "계정 프로필을 저장했습니다.");
             await StartRuntimeAsync();
+            AccountProfileCombo.ItemsSource = _appSettings.AccountProfiles;
+            AccountProfileCombo.SelectedValue = _automation.AccountProfileId;
             await RefreshAccountStatusesAsync();
             MessageBox.Show("계정 프로필을 저장했습니다.", "계정 프로필");
         }
@@ -531,15 +541,21 @@ public partial class MainWindow : Window
     }
 
     /// <summary>
-    /// 계정 프로필별 전역 단축키입니다. 프로필을 추가하면 단축키도 그만큼 늘어나며,
-    /// 어느 계정으로 자동화를 시작할지가 단축키로 결정됩니다.
+    /// 규칙마다 전역 단축키를 하나씩 답니다. 규칙이 계정 프로필을 지정했으면 그 계정으로
+    /// 시작하고, 지정하지 않았으면 계정을 건드리지 않습니다.
     /// </summary>
-    private IReadOnlyList<AutomationCoordinator.AccountHotkey> CreateAccountHotkeys(nint windowHandle) =>
-        _appSettings.AccountProfiles
-            .Select(profile => new AutomationCoordinator.AccountHotkey(
-                profile,
-                new WindowsGlobalHotkeyService(windowHandle)))
+    private IReadOnlyList<AutomationCoordinator.AutomationRuleBinding> CreateRuleBindings(nint windowHandle) =>
+        _rules
+            .Where(rule => rule.Enabled)
+            .Select(rule => new AutomationCoordinator.AutomationRuleBinding(
+                rule,
+                new WindowsGlobalHotkeyService(windowHandle),
+                rule.AccountProfileId is { } id ? SavedProfile(id) : null))
             .ToArray();
+
+    /// <summary>지금 편집 중인 규칙입니다. 없으면 첫 규칙을 씁니다.</summary>
+    private AutomationSettings ActiveRule() =>
+        _rules.FirstOrDefault(rule => rule.Enabled) ?? _rules.FirstOrDefault() ?? new AutomationSettings();
 
     private GameAccountSessionService? CreateAccountSessionService() =>
         _secretStore is null || _logger is null
@@ -550,17 +566,17 @@ public partial class MainWindow : Window
     /// 음성채널 자동 입장은 Discord 연동과 자동 입장이 모두 켜져 있을 때만 구성합니다.
     /// 실패해도 자동화 자체는 그대로 동작합니다.
     /// </summary>
-    private VoiceChannelAutoJoin? CreateVoiceChannelAutoJoin()
+    private VoiceChannelAutoJoin? CreateVoiceChannelAutoJoin(AutomationSettings rule)
     {
-        if (!_automation.UseDiscordIntegration ||
-            !_automation.AutoJoinVoiceChannel ||
+        if (!rule.UseDiscordIntegration ||
+            !rule.AutoJoinVoiceChannel ||
             _logger is null)
         {
             return null;
         }
 
         _rpcVoiceClient = new DiscordRpcVoiceChannelClient(
-            _automation.DiscordRpcClientId,
+            rule.DiscordRpcClientId,
             async cancellationToken => (await GetUsableRpcTokensAsync(cancellationToken))?.AccessToken,
             TimeSpan.FromSeconds(20));
         return new VoiceChannelAutoJoin(_rpcVoiceClient, _logger);
@@ -683,6 +699,90 @@ public partial class MainWindow : Window
 
     private void ApplySettingsToControls()
     {
+        LoadAccountProfilesIntoControls();
+        RefreshRuleCombo(_rules.IndexOf(_automation) is var found && found >= 0 ? found : 0);
+        StartupCheck.IsChecked = _appSettings.StartWithWindows || _startup.IsEnabled();
+    }
+
+    /// <summary>규칙 목록을 다시 그리고 지정한 규칙을 폼에 올립니다.</summary>
+    private void RefreshRuleCombo(int index)
+    {
+        _loadingRule = true;
+        AutomationRuleCombo.ItemsSource = null;
+        AutomationRuleCombo.ItemsSource = _rules;
+        _editingRule = Math.Clamp(index, 0, Math.Max(0, _rules.Count - 1));
+        AutomationRuleCombo.SelectedIndex = _rules.Count == 0 ? -1 : _editingRule;
+        _loadingRule = false;
+        if (_rules.Count > 0)
+        {
+            LoadRuleIntoControls(_rules[_editingRule]);
+        }
+    }
+
+    private void AutomationRule_SelectionChanged(object sender, System.Windows.Controls.SelectionChangedEventArgs e)
+    {
+        if (_loadingRule || AutomationRuleCombo.SelectedIndex < 0)
+        {
+            return;
+        }
+
+        // 편집하던 값을 잃지 않도록 먼저 되받아 둔다. 저장은 저장 버튼이 한다.
+        CommitEditingRule();
+        _editingRule = AutomationRuleCombo.SelectedIndex;
+        LoadRuleIntoControls(_rules[_editingRule]);
+    }
+
+    /// <summary>폼에 입력된 값을 편집 중이던 규칙에 되받습니다.</summary>
+    private void CommitEditingRule()
+    {
+        if (_editingRule >= 0 && _editingRule < _rules.Count)
+        {
+            _rules[_editingRule] = ReadAutomationFromControls();
+        }
+    }
+
+    private void AddAutomationRule_Click(object sender, RoutedEventArgs e)
+    {
+        CommitEditingRule();
+        // 같은 실행 환경을 공유하는 규칙을 만들기 쉽도록 현재 규칙을 본떠 만든다.
+        var template = _rules.Count > 0 ? _rules[_editingRule] : new AutomationSettings();
+        _rules.Add(template with
+        {
+            Id = Guid.NewGuid(),
+            Name = "새 자동화",
+            Hotkey = new HotkeyGesture(true, true, true, false, string.Empty),
+            AccountProfileId = null,
+        });
+        RefreshRuleCombo(_rules.Count - 1);
+    }
+
+    private void DeleteAutomationRule_Click(object sender, RoutedEventArgs e)
+    {
+        if (_rules.Count <= 1)
+        {
+            MessageBox.Show("자동화 규칙은 최소 하나가 필요합니다.", "자동화");
+            return;
+        }
+
+        if (MessageBox.Show(
+                $"{_rules[_editingRule].Name} 규칙을 삭제할까요? 계정 프로필과 저장된 세션은 그대로 남습니다.",
+                "자동화",
+                MessageBoxButton.OKCancel,
+                MessageBoxImage.Question) != MessageBoxResult.OK)
+        {
+            return;
+        }
+
+        _rules.RemoveAt(_editingRule);
+        RefreshRuleCombo(Math.Max(0, _editingRule - 1));
+    }
+
+    private void ClearAccountProfile_Click(object sender, RoutedEventArgs e) =>
+        AccountProfileCombo.SelectedValue = null;
+
+    private void LoadRuleIntoControls(AutomationSettings rule)
+    {
+        _automation = rule;
         AutomationNameText.Text = _automation.Name;
         EnabledCheck.IsChecked = _automation.Enabled;
         CtrlCheck.IsChecked = _automation.Hotkey.Control;
@@ -696,13 +796,13 @@ public partial class MainWindow : Window
         DiscordPathText.Text = _automation.DiscordExecutablePath;
         DiscordProcessText.Text = _automation.DiscordProcessName;
         ApiUrlText.Text = _automation.DiscordApiBaseUrl;
-        LoadAccountProfilesIntoControls();
+        AccountProfileCombo.ItemsSource = _appSettings.AccountProfiles;
+        AccountProfileCombo.SelectedValue = _automation.AccountProfileId;
         AutoJoinVoiceCheck.IsChecked = _automation.AutoJoinVoiceChannel;
         VoiceChannelTargetText.Text = _automation.VoiceChannelTarget;
         RpcClientIdText.Text = _automation.DiscordRpcClientId;
         RestoreAudioCheck.IsChecked = _automation.RestoreAudioOnExit;
         DeferRestoreCheck.IsChecked = _automation.DeferRestoreWhileDiscordInVoice;
-        StartupCheck.IsChecked = _appSettings.StartWithWindows || _startup.IsEnabled();
         UpdateRestorePolicyEnabled();
     }
 
@@ -727,6 +827,7 @@ public partial class MainWindow : Window
     {
         Id = _automation.Id,
         Name = AutomationNameText.Text.Trim(),
+        AccountProfileId = AccountProfileCombo.SelectedValue as Guid?,
         Enabled = EnabledCheck.IsChecked == true,
         Hotkey = new HotkeyGesture(
             CtrlCheck.IsChecked == true,
@@ -759,10 +860,14 @@ public partial class MainWindow : Window
 
         try
         {
-            var candidate = ReadAutomationFromControls();
+            CommitEditingRule();
             var existingToken = await _secretStore.LoadDiscordApiTokenAsync(CancellationToken.None);
             var suppliedToken = ApiTokenPassword.Password;
-            ValidateSettings(candidate, suppliedToken, existingToken);
+            foreach (var rule in _rules)
+            {
+                ValidateSettings(rule, suppliedToken, existingToken);
+            }
+            EnsureHotkeysAreUnique();
 
             if (!string.IsNullOrWhiteSpace(suppliedToken))
             {
@@ -770,27 +875,62 @@ public partial class MainWindow : Window
                 ApiTokenPassword.Clear();
             }
 
-            _automation = candidate;
-            _appSettings = new AppSettings
+            _appSettings = _appSettings with
             {
                 SchemaVersion = SettingsMigration.CurrentSchemaVersion,
-                StartWithWindows = StartupCheck.IsChecked == true,
-                Automations = [candidate],
-                // 계정 프로필은 계정 탭에서 따로 관리하므로 그대로 유지한다.
-                AccountProfiles = _appSettings.AccountProfiles,
+                Automations = [.. _rules],
             };
             await _settingsStore.SaveAsync(_appSettings, CancellationToken.None);
-            _startup.SetEnabled(
-                _appSettings.StartWithWindows,
-                Environment.ProcessPath ?? throw new InvalidOperationException("현재 실행 경로를 찾을 수 없습니다."));
-            _logger?.Info("settings-saved", "설정을 저장하고 자동화를 다시 적용했습니다.");
+            _logger?.Info("settings-saved", "자동화 규칙을 저장하고 다시 적용했습니다.");
             await StartRuntimeAsync();
+            RefreshRuleCombo(_editingRule);
             UpdateStatus();
-            MessageBox.Show("설정을 저장했습니다.", "eslee OneKey");
+            MessageBox.Show("자동화 규칙을 저장했습니다.", "eslee OneKey");
         }
         catch (Exception exception)
         {
             _logger?.Error("settings-save-failed", exception, "설정 저장에 실패했습니다.");
+            MessageBox.Show(exception.Message, "설정 오류", MessageBoxButton.OK, MessageBoxImage.Warning);
+        }
+    }
+
+    /// <summary>
+    /// 같은 조합을 두 규칙이 쓰면 Windows가 두 번째 등록을 거부합니다. 저장 전에 막습니다.
+    /// </summary>
+    private void EnsureHotkeysAreUnique()
+    {
+        var seen = new List<HotkeyGesture>();
+        foreach (var rule in _rules.Where(rule => rule.Enabled))
+        {
+            if (seen.Contains(rule.Hotkey))
+            {
+                throw new InvalidOperationException(
+                    $"{rule.Name}이(가) 다른 자동화와 같은 단축키를 씁니다. 서로 다른 조합을 지정하세요.");
+            }
+            seen.Add(rule.Hotkey);
+        }
+    }
+
+    private async void SaveAppSettings_Click(object sender, RoutedEventArgs e)
+    {
+        if (_initializationFailed || _settingsStore is null)
+        {
+            return;
+        }
+
+        try
+        {
+            _appSettings = _appSettings with { StartWithWindows = StartupCheck.IsChecked == true };
+            await _settingsStore.SaveAsync(_appSettings, CancellationToken.None);
+            _startup.SetEnabled(
+                _appSettings.StartWithWindows,
+                Environment.ProcessPath ?? throw new InvalidOperationException("현재 실행 경로를 찾을 수 없습니다."));
+            _logger?.Info("app-settings-saved", "앱 설정을 저장했습니다.");
+            MessageBox.Show("앱 설정을 저장했습니다.", "eslee OneKey");
+        }
+        catch (Exception exception)
+        {
+            _logger?.Error("app-settings-save-failed", exception, "앱 설정 저장에 실패했습니다.");
             MessageBox.Show(exception.Message, "설정 오류", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
     }

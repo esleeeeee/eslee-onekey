@@ -11,11 +11,6 @@ namespace Eslee.OneKey.App;
 public sealed class AccountProfileViewModel : INotifyPropertyChanged
 {
     private string _name = string.Empty;
-    private bool _control = true;
-    private bool _alt = true;
-    private bool _shift = true;
-    private bool _windows;
-    private string _key = string.Empty;
     private string _sessionFilePath = string.Empty;
     private string _launcherProcesses = string.Empty;
     private string _blockingProcesses = string.Empty;
@@ -29,11 +24,6 @@ public sealed class AccountProfileViewModel : INotifyPropertyChanged
     {
         Id = profile.Id;
         _name = profile.Name;
-        _control = profile.Hotkey.Control;
-        _alt = profile.Hotkey.Alt;
-        _shift = profile.Hotkey.Shift;
-        _windows = profile.Hotkey.Windows;
-        _key = profile.Hotkey.Key;
         _sessionFilePath = profile.SessionFilePath;
         _launcherProcesses = string.Join(", ", profile.LauncherProcessNames);
         _blockingProcesses = string.Join(", ", profile.BlockingProcessNames);
@@ -42,11 +32,6 @@ public sealed class AccountProfileViewModel : INotifyPropertyChanged
     public Guid Id { get; init; } = Guid.NewGuid();
 
     public string Name { get => _name; set => Set(ref _name, value); }
-    public bool Control { get => _control; set => Set(ref _control, value); }
-    public bool Alt { get => _alt; set => Set(ref _alt, value); }
-    public bool Shift { get => _shift; set => Set(ref _shift, value); }
-    public bool Windows { get => _windows; set => Set(ref _windows, value); }
-    public string Key { get => _key; set => Set(ref _key, value); }
     public string SessionFilePath { get => _sessionFilePath; set => Set(ref _sessionFilePath, value); }
     public string LauncherProcesses { get => _launcherProcesses; set => Set(ref _launcherProcesses, value); }
     public string BlockingProcesses { get => _blockingProcesses; set => Set(ref _blockingProcesses, value); }
@@ -56,7 +41,6 @@ public sealed class AccountProfileViewModel : INotifyPropertyChanged
     {
         Id = Id,
         Name = Name.Trim(),
-        Hotkey = new HotkeyGesture(Control, Alt, Shift, Windows, Key.Trim()),
         SessionFilePath = SessionFilePath.Trim(),
         LauncherProcessNames = SplitNames(LauncherProcesses),
         BlockingProcessNames = SplitNames(BlockingProcesses),
