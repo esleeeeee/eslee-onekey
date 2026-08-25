@@ -128,7 +128,8 @@ public sealed class DiscordRpcVoiceChannelClient(
             await Task.Delay(TimeSpan.FromMilliseconds(500), cancellationToken);
         }
 
-        var (_, authenticateError) = await SendCommandCoreAsync(
+        // 재연결 경로를 타지 않도록 교환만 직접 부른다. 여기서 다시 연결하면 재귀가 된다.
+        var (_, authenticateError) = await ExchangeAsync(
             "AUTHENTICATE",
             new { access_token = accessToken },
             cancellationToken);
@@ -202,6 +203,32 @@ public sealed class DiscordRpcVoiceChannelClient(
     /// <summary>성공하면 (data, null), 오류 응답이면 (null, 사유)를 돌려줍니다.</summary>
     /// <summary>게이트를 쥔 상태에서만 부릅니다. 요청과 응답이 한 쌍으로 묶여야 합니다.</summary>
     private async Task<(JsonElement? Data, string? Error)> SendCommandCoreAsync<T>(
+        string command,
+        T args,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await ExchangeAsync(command, args, cancellationToken);
+        }
+        catch (Exception exception) when (exception is IOException or ObjectDisposedException)
+        {
+            // NamedPipeClientStream.IsConnected는 마지막으로 성공한 입출력 기준이라,
+            // Discord가 죽어도 참을 계속 돌려줍니다. 그래서 끊긴 것은 실제로 써 보고
+            // 나서야 알 수 있습니다. Discord를 다시 시작하면 남아 있던 파이프가 바로
+            // 이 상태가 되므로, 버리고 한 번만 다시 연결해 그대로 이어 갑니다.
+            // 그러지 않으면 재시작 후 첫 호출이 늘 실패합니다.
+            await ClosePipeAsync();
+            var reconnected = await ConnectCoreAsync(cancellationToken);
+            if (reconnected.Status != DiscordRpcStatus.Connected)
+            {
+                throw;
+            }
+            return await ExchangeAsync(command, args, cancellationToken);
+        }
+    }
+
+    private async Task<(JsonElement? Data, string? Error)> ExchangeAsync<T>(
         string command,
         T args,
         CancellationToken cancellationToken)
