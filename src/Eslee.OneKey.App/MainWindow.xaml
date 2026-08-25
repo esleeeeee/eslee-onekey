@@ -262,7 +262,15 @@
                                             <Button Content="목록 새로고침" Click="RefreshDiscordLists_Click" />
                                         </StackPanel>
                                         <TextBlock x:Name="DiscordListStatusText" Text="" Foreground="#69677A"
-                                                   TextWrapping="Wrap" Margin="140,0,0,0" />
+                                                   TextWrapping="Wrap" Margin="140,0,0,6" />
+                                        <Expander Header="목록에서 고를 수 없을 때" Margin="140,0,0,0" Foreground="#69677A">
+                                            <StackPanel Style="{StaticResource Row}" Margin="0,8,0,0">
+                                                <TextBlock Text="채널 직접 입력" Style="{StaticResource FieldLabel}" />
+                                                <TextBox x:Name="VoiceChannelTargetText" Width="320" />
+                                                <TextBlock Style="{StaticResource Hint}"
+                                                           ToolTip="목록에 나오지 않을 때만 채널 링크나 ID를 직접 넣습니다." />
+                                            </StackPanel>
+                                        </Expander>
                                     </StackPanel>
                                 </StackPanel>
 
@@ -321,14 +329,8 @@
                                     <TextBlock Text="Discord 프로세스명" Style="{StaticResource FieldLabel}" />
                                     <TextBox x:Name="DiscordProcessText" Width="280" />
                                 </StackPanel>
-                                <StackPanel Style="{StaticResource Row}">
-                                    <TextBlock Text="음성채널 직접 입력" Style="{StaticResource FieldLabel}" />
-                                    <TextBox x:Name="VoiceChannelTargetText" Width="360" />
-                                    <TextBlock Style="{StaticResource Hint}"
-                                               ToolTip="목록에서 고를 수 없을 때만 채널 링크나 ID를 직접 넣습니다." />
-                                </StackPanel>
                                 <TextBlock Style="{StaticResource SectionNote}" Margin="140,0,0,0"
-                                           Text="고급 값은 선택한 자동화에 적용됩니다. 바꾼 뒤 자동화 탭에서 저장하세요." />
+                                           Text="이 값들은 OneKey 전체에 하나만 있습니다. 어느 자동화를 보고 있든 같습니다." />
                             </StackPanel>
                         </Expander>
                     </StackPanel>
