@@ -201,6 +201,65 @@ public sealed class DiscordRpcVoiceChannelClient(
     }
 
     /// <summary>성공하면 (data, null), 오류 응답이면 (null, 사유)를 돌려줍니다.</summary>
+    public async Task<IReadOnlyList<DiscordGuild>> GetGuildsAsync(CancellationToken cancellationToken)
+    {
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            var (data, error) = await SendCommandCoreAsync("GET_GUILDS", new { }, cancellationToken);
+            if (error is not null)
+            {
+                throw new InvalidOperationException($"서버 목록을 가져오지 못했습니다({error}).");
+            }
+            if (data is null || !data.Value.TryGetProperty("guilds", out var guilds))
+            {
+                return [];
+            }
+            return [.. guilds.EnumerateArray()
+                .Select(guild => new DiscordGuild(
+                    guild.TryGetProperty("id", out var id) ? id.GetString() ?? string.Empty : string.Empty,
+                    guild.TryGetProperty("name", out var name) ? name.GetString() ?? string.Empty : string.Empty))
+                .Where(guild => guild.Id.Length > 0)];
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    public async Task<IReadOnlyList<DiscordVoiceChannel>> GetVoiceChannelsAsync(
+        string guildId,
+        CancellationToken cancellationToken)
+    {
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            var (data, error) = await SendCommandCoreAsync(
+                "GET_CHANNELS",
+                new { guild_id = guildId },
+                cancellationToken);
+            if (error is not null)
+            {
+                throw new InvalidOperationException($"음성채널 목록을 가져오지 못했습니다({error}).");
+            }
+            if (data is null || !data.Value.TryGetProperty("channels", out var channels))
+            {
+                return [];
+            }
+            // type 2가 음성채널입니다.
+            return [.. channels.EnumerateArray()
+                .Where(channel => channel.TryGetProperty("type", out var type) && type.GetInt32() == 2)
+                .Select(channel => new DiscordVoiceChannel(
+                    channel.TryGetProperty("id", out var id) ? id.GetString() ?? string.Empty : string.Empty,
+                    channel.TryGetProperty("name", out var name) ? name.GetString() ?? string.Empty : string.Empty))
+                .Where(channel => channel.Id.Length > 0)];
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
     /// <summary>게이트를 쥔 상태에서만 부릅니다. 요청과 응답이 한 쌍으로 묶여야 합니다.</summary>
     private async Task<(JsonElement? Data, string? Error)> SendCommandCoreAsync<T>(
         string command,
