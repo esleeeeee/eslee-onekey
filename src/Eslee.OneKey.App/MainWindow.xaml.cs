@@ -32,6 +32,9 @@ public partial class MainWindow : Window
     /// <summary>왼쪽 목록에 보이는 줄입니다.</summary>
     private readonly ObservableCollection<AutomationRuleViewModel> _ruleItems = [];
 
+    /// <summary>늦게 도착한 조회 결과가 새 선택을 덮지 않도록 세는 번호입니다.</summary>
+    private int _discordLoadGeneration;
+
     /// <summary>봇도 함께 들어가 있는 서버만 담습니다. 앱이 도는 동안 재사용합니다.</summary>
     private readonly List<DiscordGuild> _guilds = [];
     private readonly Dictionary<string, IReadOnlyList<DiscordVoiceChannel>> _voiceChannels = [];
@@ -447,21 +450,23 @@ public partial class MainWindow : Window
                 await _secretStore.SaveRpcSecretsAsync(
                     System.Text.Json.JsonSerializer.Serialize(tokens),
                     CancellationToken.None);
-                RpcStatusText.Text = "연결됨";
                 _logger?.Info("rpc-connected", "Discord RPC 인증을 완료했습니다.");
+                // 성공은 팝업 대신 화면의 연결 상태로 바로 알립니다.
+                await RefreshDiscordConnectionAsync();
+                await LoadDiscordListsAsync(force: true);
             }
             else
             {
-                RpcStatusText.Text = "연결 실패";
+                RpcStatusText.Text = "Discord 연결 필요";
                 _logger?.Warning("rpc-connect-failed", "Discord RPC 인증에 실패했습니다.");
+                MessageBox.Show(this, result.Message, "Discord 연결", MessageBoxButton.OK, MessageBoxImage.Warning);
             }
-            MessageBox.Show(result.Message, "Discord 연결");
         }
         catch (Exception exception)
         {
-            RpcStatusText.Text = "연결 실패";
+            RpcStatusText.Text = "연결할 수 없음";
             _logger?.Error("rpc-connect-failed", exception, "Discord RPC 인증 중 오류가 발생했습니다.");
-            MessageBox.Show(exception.Message, "Discord 연결", MessageBoxButton.OK, MessageBoxImage.Warning);
+            MessageBox.Show(this, exception.Message, "Discord 연결", MessageBoxButton.OK, MessageBoxImage.Warning);
         }
         finally
         {
@@ -585,12 +590,75 @@ public partial class MainWindow : Window
 
         UseDiscordCheck.IsChecked = rule.UseDiscordIntegration;
         AutoJoinVoiceCheck.IsChecked = rule.AutoJoinVoiceChannel;
-        VoiceChannelTargetText.Text = rule.VoiceChannelTarget;
+        // 수동 입력은 진짜 폴백입니다. 목록에서 풀리는 값은 여기 넣지 않습니다.
+        VoiceChannelTargetText.Text = string.Empty;
         ShowSavedDiscordSelection(rule);
 
         _loadingRule = false;
         UpdateSectionVisibility();
         _ = RefreshAccountStatusesAsync();
+        _ = RefreshDiscordConnectionAsync();
+    }
+
+    /// <summary>
+    /// 설정이 저장돼 있다고 연결된 것은 아닙니다. 실제로 물어보고 나서 표시합니다.
+    /// 화면을 옮기는 사이에 늦게 도착한 결과가 새 화면을 덮지 않도록 세대 번호로 거릅니다.
+    /// </summary>
+    private async Task RefreshDiscordConnectionAsync()
+    {
+        var generation = ++_discordLoadGeneration;
+        RpcStatusText.Text = "확인 중...";
+
+        if (UseDiscordCheck.IsChecked != true)
+        {
+            RpcStatusText.Text = "사용 안 함";
+            return;
+        }
+
+        var processName = string.IsNullOrWhiteSpace(_appSettings.DiscordProcessName)
+            ? "Discord"
+            : _appSettings.DiscordProcessName;
+        try
+        {
+            if (!await _processes.IsRunningAsync(processName, CancellationToken.None))
+            {
+                if (generation == _discordLoadGeneration)
+                {
+                    RpcStatusText.Text = "Discord를 실행해 주세요";
+                }
+                return;
+            }
+
+            var client = EnsureRpcVoiceClient(_automation);
+            if (client is null)
+            {
+                if (generation == _discordLoadGeneration)
+                {
+                    RpcStatusText.Text = "Discord 연결 필요";
+                }
+                return;
+            }
+
+            var connection = await client.EnsureConnectedAsync(CancellationToken.None);
+            if (generation != _discordLoadGeneration)
+            {
+                return;
+            }
+            RpcStatusText.Text = connection.Status switch
+            {
+                DiscordRpcStatus.Connected => "연결됨",
+                DiscordRpcStatus.NotAuthorized => "Discord 연결 필요",
+                _ => "연결할 수 없음",
+            };
+        }
+        catch (Exception exception)
+        {
+            _logger?.Error("rpc-status-failed", exception, "Discord 연결 상태를 확인하지 못했습니다.");
+            if (generation == _discordLoadGeneration)
+            {
+                RpcStatusText.Text = "연결할 수 없음";
+            }
+        }
     }
 
     /// <summary>
@@ -645,6 +713,40 @@ public partial class MainWindow : Window
 
     private static Visibility Visible(bool shown) => shown ? Visibility.Visible : Visibility.Collapsed;
 
+    /// <summary>
+    /// WPF는 키보드 포커스만으로는 설명을 띄우지 않습니다. 마우스를 쓰지 않는 사람도
+    /// 읽을 수 있도록 직접 엽니다.
+    /// </summary>
+    private void Hint_GotKeyboardFocus(object sender, System.Windows.Input.KeyboardFocusChangedEventArgs e)
+    {
+        if (sender is FrameworkElement element)
+        {
+            var tip = EnsureToolTip(element);
+            tip.PlacementTarget = element;
+            tip.Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom;
+            tip.IsOpen = true;
+        }
+    }
+
+    private void Hint_LostKeyboardFocus(object sender, System.Windows.Input.KeyboardFocusChangedEventArgs e)
+    {
+        if (sender is FrameworkElement { ToolTip: System.Windows.Controls.ToolTip tip })
+        {
+            tip.IsOpen = false;
+        }
+    }
+
+    private static System.Windows.Controls.ToolTip EnsureToolTip(FrameworkElement element)
+    {
+        if (element.ToolTip is System.Windows.Controls.ToolTip existing)
+        {
+            return existing;
+        }
+        var created = new System.Windows.Controls.ToolTip { Content = element.ToolTip };
+        element.ToolTip = created;
+        return created;
+    }
+
     private void FeatureToggle_Changed(object sender, RoutedEventArgs e)
     {
         if (!_loadingRule)
@@ -654,15 +756,25 @@ public partial class MainWindow : Window
             {
                 _ = RefreshAccountStatusesAsync();
             }
+            if (ReferenceEquals(sender, UseDiscordCheck) && UseDiscordCheck.IsChecked == true)
+            {
+                CommitEditingRule();
+                _ = RefreshDiscordConnectionAsync();
+            }
         }
     }
 
-    /// <summary>폼에 입력된 값을 편집 중이던 규칙에 되받습니다.</summary>
+    /// <summary>
+    /// 폼에 입력된 값을 편집 중이던 규칙에 되받습니다. 화면에서 방금 켠 값을 곧바로
+    /// 쓰는 곳이 있어 현재 규칙도 함께 맞춰 둡니다. 그러지 않으면 Discord 연동을 켜자마자
+    /// 목록을 불러올 때 아직 꺼진 것으로 보입니다.
+    /// </summary>
     private void CommitEditingRule()
     {
         if (_editingRule >= 0 && _editingRule < _rules.Count)
         {
             _rules[_editingRule] = ReadAutomationFromControls();
+            _automation = _rules[_editingRule];
         }
     }
 
@@ -998,10 +1110,20 @@ public partial class MainWindow : Window
             return;
         }
 
+        // 화면에서 방금 켠 값을 반영한 뒤 판단한다. 저장 전이라고 꺼진 것으로 보면
+        // 연동이 켜져 있는데도 켜라는 안내가 뜬다.
+        CommitEditingRule();
+        if (UseDiscordCheck.IsChecked != true)
+        {
+            DiscordListStatusText.Text = "Discord 연동을 먼저 켜세요.";
+            return;
+        }
+
+        var generation = ++_discordLoadGeneration;
         var client = EnsureRpcVoiceClient(_automation);
         if (client is null)
         {
-            DiscordListStatusText.Text = "Discord 연동을 먼저 켜세요.";
+            DiscordListStatusText.Text = "Discord 연결이 필요합니다. Discord 다시 연결을 눌러 주세요.";
             return;
         }
 
@@ -1039,16 +1161,28 @@ public partial class MainWindow : Window
                 _voiceChannels.Clear();
             }
 
+            if (generation != _discordLoadGeneration)
+            {
+                return;
+            }
+
+            _loadingRule = true;
             GuildCombo.ItemsSource = null;
             GuildCombo.ItemsSource = _guilds;
-            GuildCombo.SelectedValue = _automation.VoiceChannelGuildId;
+            // 저장된 서버가 목록에 없으면 첫 서버를 골라 준다. 그러지 않으면 아무것도
+            // 선택되지 않아 채널이 비어 보이고, 한 번 더 눌러야 나타난다.
+            var saved = _automation.VoiceChannelGuildId;
+            var target = _guilds.Any(guild => guild.Id == saved) ? saved : _guilds.FirstOrDefault()?.Id;
+            GuildCombo.SelectedValue = target;
+            _loadingRule = false;
+
             DiscordListStatusText.Text = _guilds.Count == 0
                 ? "OneKey 봇과 함께 있는 서버가 없습니다. 봇을 서버에 초대한 뒤 다시 불러오세요."
                 : $"서버 {_guilds.Count}개를 불러왔습니다.";
 
-            if (GuildCombo.SelectedValue is string guildId)
+            if (target is not null)
             {
-                await LoadVoiceChannelsAsync(guildId);
+                await LoadVoiceChannelsAsync(target);
             }
         }
         catch (Exception exception)
@@ -1060,6 +1194,7 @@ public partial class MainWindow : Window
 
     private async Task LoadVoiceChannelsAsync(string guildId)
     {
+        var generation = _discordLoadGeneration;
         var client = EnsureRpcVoiceClient(_automation);
         if (client is null || string.IsNullOrWhiteSpace(guildId))
         {
@@ -1074,13 +1209,34 @@ public partial class MainWindow : Window
                 _voiceChannels[guildId] = channels;
             }
 
+            if (generation != _discordLoadGeneration)
+            {
+                return;
+            }
+
             var previous = _automation.VoiceChannelTarget;
+            var resolved = channels.Any(channel => channel.Id == previous);
+            _loadingRule = true;
             VoiceChannelCombo.ItemsSource = null;
             VoiceChannelCombo.ItemsSource = channels;
-            VoiceChannelCombo.SelectedValue = previous;
+            // 못 푼 값을 두고 첫 채널을 골라 두면, 저장할 때 사용자가 정한 채널이
+            // 조용히 바뀝니다. 그럴 때는 아무것도 고르지 않고 직접 입력값을 살립니다.
+            VoiceChannelCombo.SelectedValue = resolved ? previous : null;
+            _loadingRule = false;
+
+            // 목록에서 풀리는 값은 드롭다운이 갖고, 풀리지 않는 값만 수동 입력에 남깁니다.
+            VoiceChannelTargetText.Text = resolved || string.IsNullOrWhiteSpace(previous)
+                ? string.Empty
+                : previous;
+
             if (channels.Count == 0)
             {
                 DiscordListStatusText.Text = "이 서버에서 볼 수 있는 음성채널이 없습니다.";
+            }
+            else if (!resolved && !string.IsNullOrWhiteSpace(previous))
+            {
+                DiscordListStatusText.Text =
+                    "저장해 둔 음성채널을 목록에서 찾지 못해 직접 입력값으로 남겼습니다.";
             }
         }
         catch (Exception exception)

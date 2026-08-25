@@ -4,15 +4,49 @@
         Title="eslee OneKey" Height="760" Width="1020" MinHeight="640" MinWidth="900"
         Background="#F5F6FA" WindowStartupLocation="CenterScreen">
     <Window.Resources>
-        <!-- 설명이 필요한 항목 옆에 붙는 도움말 표시입니다. -->
-        <Style x:Key="Hint" TargetType="TextBlock">
-            <Setter Property="Text" Value="&#xf8fe;" />
-            <Setter Property="FontFamily" Value="Segoe UI Symbol" />
-            <Setter Property="Foreground" Value="#8B88A3" />
-            <Setter Property="Margin" Value="5,0,0,0" />
-            <Setter Property="VerticalAlignment" Value="Center" />
-            <Setter Property="Cursor" Value="Help" />
+        <!--
+            도움말 표시입니다. 특정 글꼴에만 있는 글자를 쓰면 없는 환경에서 네모로
+            깨지므로, 원과 물음표를 직접 그립니다. 마우스를 올리거나 키보드로
+            이동해도 설명이 뜹니다.
+        -->
+        <Style x:Key="Hint" TargetType="ContentControl">
             <Setter Property="Focusable" Value="True" />
+            <Setter Property="Cursor" Value="Help" />
+            <Setter Property="Margin" Value="6,0,0,0" />
+            <Setter Property="VerticalAlignment" Value="Center" />
+            <Setter Property="Width" Value="16" />
+            <Setter Property="Height" Value="16" />
+            <EventSetter Event="GotKeyboardFocus" Handler="Hint_GotKeyboardFocus" />
+            <EventSetter Event="LostKeyboardFocus" Handler="Hint_LostKeyboardFocus" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ContentControl">
+                        <Border x:Name="Circle" Width="16" Height="16" CornerRadius="8"
+                                Background="#DCDAEA" SnapsToDevicePixels="True">
+                            <TextBlock Text="?" FontSize="11" FontWeight="Bold" Foreground="#4A4766"
+                                       HorizontalAlignment="Center" VerticalAlignment="Center" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Circle" Property="Background" Value="#C7C3DE" />
+                            </Trigger>
+                            <Trigger Property="IsKeyboardFocused" Value="True">
+                                <Setter TargetName="Circle" Property="Background" Value="#C7C3DE" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+
+        <!-- 상단 막대의 버튼은 크기와 여백을 맞춥니다. -->
+        <Style x:Key="BarButton" TargetType="Button">
+            <Setter Property="Height" Value="30" />
+            <Setter Property="Padding" Value="14,0" />
+            <Setter Property="Margin" Value="10,0,0,0" />
+            <Setter Property="FontSize" Value="12" />
+            <Setter Property="MinWidth" Value="120" />
+            <Setter Property="VerticalAlignment" Value="Center" />
         </Style>
         <Style x:Key="SectionTitle" TargetType="TextBlock">
             <Setter Property="FontSize" Value="15" />
@@ -61,11 +95,12 @@
                             <StackPanel Orientation="Horizontal">
                                 <TextBlock x:Name="GlobalStateText" Text="설정을 불러오는 중" FontWeight="SemiBold" VerticalAlignment="Center" />
                                 <TextBlock x:Name="LastRunStatus" Text="" Foreground="#69677A" Margin="14,0,0,0" VerticalAlignment="Center" />
-                                <Button x:Name="PauseButton" Content="자동화 일시정지" Click="Pause_Click" Margin="18,0,0,0" />
+                                <Button x:Name="PauseButton" Content="자동화 일시정지" Click="Pause_Click"
+                                        Style="{StaticResource BarButton}" Margin="18,0,0,0" />
                                 <Button x:Name="ManualRestoreButton" Content="지금 원래 장치로 복원" Click="ManualRestore_Click"
-                                        Visibility="Collapsed" />
+                                        Style="{StaticResource BarButton}" Visibility="Collapsed" />
                                 <Button x:Name="KeepCurrentButton" Content="현재 장치 유지 후 종료" Click="KeepCurrent_Click"
-                                        Visibility="Collapsed" />
+                                        Style="{StaticResource BarButton}" Visibility="Collapsed" />
                             </StackPanel>
                             <TextBlock x:Name="LastErrorStatus" Text="" Foreground="#A12828" TextWrapping="Wrap"
                                        Margin="0,6,0,0" Visibility="Collapsed" />
@@ -130,7 +165,7 @@
                                     <CheckBox x:Name="ShiftCheck" Content="Shift" Margin="6,0" VerticalAlignment="Center" />
                                     <CheckBox x:Name="WinCheck" Content="Win" Margin="6,0" VerticalAlignment="Center" />
                                     <TextBox x:Name="HotkeyText" Width="60" MaxLength="3" />
-                                    <TextBlock Style="{StaticResource Hint}" ToolTip="이 키 조합을 누르면 해당 자동화가 실행됩니다." />
+                                    <ContentControl Style="{StaticResource Hint}" ToolTip="이 키 조합을 누르면 해당 자동화가 실행됩니다." />
                                 </StackPanel>
                                 <WrapPanel Margin="140,4,0,18">
                                     <Button x:Name="StartNowButton" Content="지금 실행" Click="StartNow_Click"
@@ -152,7 +187,7 @@
                                     <StackPanel Style="{StaticResource Row}">
                                         <TextBlock Text="종료 감시 프로그램" Style="{StaticResource FieldLabel}" />
                                         <TextBox x:Name="WatchProcessText" Width="280" />
-                                        <TextBlock Style="{StaticResource Hint}"
+                                        <ContentControl Style="{StaticResource Hint}"
                                                    ToolTip="이 프로그램이 종료되면 OneKey가 자동화가 끝난 것으로 판단합니다." />
                                     </StackPanel>
                                 </StackPanel>
@@ -161,7 +196,7 @@
                                 <Separator Margin="0,0,0,14" />
                                 <StackPanel Orientation="Horizontal">
                                     <TextBlock Text="계정 로그인" Style="{StaticResource SectionTitle}" />
-                                    <TextBlock Style="{StaticResource Hint}"
+                                    <ContentControl Style="{StaticResource Hint}"
                                                ToolTip="저장된 로그인 세션으로 계정을 자동 전환합니다. 비밀번호는 저장하지 않습니다." />
                                 </StackPanel>
                                 <TextBlock Text="이 자동화를 실행할 때 저장된 로그인 세션으로 전환합니다. 비밀번호는 저장하지 않습니다."
@@ -218,7 +253,7 @@
                                             <StackPanel Orientation="Horizontal" Margin="0,4,0,0">
                                                 <RadioButton x:Name="RestoreDeviceRadio" GroupName="RestorePolicy" Content="실행 전 장치로 복원"
                                                              Checked="FeatureToggle_Changed" />
-                                                <TextBlock Style="{StaticResource Hint}"
+                                                <ContentControl Style="{StaticResource Hint}"
                                                            ToolTip="자동화가 끝나면 시작하기 전에 사용하던 오디오 장치로 돌아갑니다." />
                                             </StackPanel>
                                         </StackPanel>
@@ -226,7 +261,7 @@
                                     <StackPanel x:Name="DeferRestorePanel" Margin="140,0,0,0">
                                         <StackPanel Orientation="Horizontal">
                                             <CheckBox x:Name="DeferRestoreCheck" Content="Discord 통화가 끝날 때까지 복원 기다리기" />
-                                            <TextBlock Style="{StaticResource Hint}"
+                                            <ContentControl Style="{StaticResource Hint}"
                                                        ToolTip="자동화가 끝나도 Discord 통화 중이면 오디오 장치를 바로 되돌리지 않습니다. 통화가 끝나면 자동으로 복원합니다." />
                                         </StackPanel>
                                     </StackPanel>
@@ -247,7 +282,7 @@
                                     <StackPanel Orientation="Horizontal" Margin="0,4,0,8">
                                         <CheckBox x:Name="AutoJoinVoiceCheck" Content="음성채널 자동 입장"
                                                   Checked="FeatureToggle_Changed" Unchecked="FeatureToggle_Changed" />
-                                        <TextBlock Style="{StaticResource Hint}"
+                                        <ContentControl Style="{StaticResource Hint}"
                                                    ToolTip="자동화를 실행하면 선택한 Discord 음성채널에 자동으로 들어갑니다." />
                                     </StackPanel>
                                     <StackPanel x:Name="AutoJoinPanel" Margin="16,0,0,0">
@@ -267,7 +302,7 @@
                                             <StackPanel Style="{StaticResource Row}" Margin="0,8,0,0">
                                                 <TextBlock Text="채널 직접 입력" Style="{StaticResource FieldLabel}" />
                                                 <TextBox x:Name="VoiceChannelTargetText" Width="320" />
-                                                <TextBlock Style="{StaticResource Hint}"
+                                                <ContentControl Style="{StaticResource Hint}"
                                                            ToolTip="목록에 나오지 않을 때만 채널 링크나 ID를 직접 넣습니다." />
                                             </StackPanel>
                                         </Expander>
@@ -306,7 +341,7 @@
                                 <StackPanel Style="{StaticResource Row}">
                                     <TextBlock Text="RPC Client ID" Style="{StaticResource FieldLabel}" />
                                     <TextBox x:Name="RpcClientIdText" Width="280" />
-                                    <TextBlock Style="{StaticResource Hint}"
+                                    <ContentControl Style="{StaticResource Hint}"
                                                ToolTip="비워 두면 OneKey 기본 애플리케이션을 사용합니다." />
                                 </StackPanel>
                                 <StackPanel Style="{StaticResource Row}">
