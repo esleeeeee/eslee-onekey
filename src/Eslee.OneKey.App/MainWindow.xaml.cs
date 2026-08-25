@@ -993,19 +993,16 @@ public partial class MainWindow : Window
             }
         }
 
-        // 복원 보류는 자동 복원을 켠 경우에만 동작하므로 그때만 API 설정을 요구한다.
+        // 복원 보류는 이제 로컬 Discord에 직접 묻는다. 그래서 API URL이나 Token이 아니라
+        // RPC Client ID가 있어야 한다. 없으면 매번 확인에 실패해 오디오가 되돌아오지
+        // 않는다. 복원 대기에는 시한이 없기 때문이다.
         if (settings.UseDiscordIntegration &&
             settings.RestoreAudioOnExit &&
-            settings.DeferRestoreWhileDiscordInVoice)
+            settings.DeferRestoreWhileDiscordInVoice &&
+            string.IsNullOrWhiteSpace(settings.DiscordRpcClientId))
         {
-            if (!DiscordVoiceStatusClient.TryBuildEndpoint(settings.DiscordApiBaseUrl, out _))
-            {
-                throw new InvalidOperationException("Discord API URL을 올바르게 입력하세요.");
-            }
-            if (string.IsNullOrWhiteSpace(suppliedToken) && string.IsNullOrWhiteSpace(existingToken))
-            {
-                throw new InvalidOperationException("Discord API Token을 입력하세요.");
-            }
+            throw new InvalidOperationException(
+                "통화 중 복원 보류를 쓰려면 RPC Client ID를 입력하고 Discord 연결을 수행하세요.");
         }
     }
 
