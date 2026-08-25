@@ -29,7 +29,7 @@ public sealed class SettingsMigrationV5Tests
               "targetAudioEndpointId": "{0.0.0.00000000}.{headset}",
               "restoreAudioOnExit": false,
               "autoJoinVoiceChannel": true,
-              "voiceChannelTarget": "1255119234934116435",
+              "voiceChannelTarget": "2223334445556667778",
               "discordRpcClientId": "1525689872621",
               "deferRestoreWhileDiscordInVoice": true
             }
@@ -106,7 +106,7 @@ public sealed class SettingsMigrationV5Tests
             Assert.Equal("{0.0.0.00000000}.{headset}", rule.TargetAudioEndpointId);
             Assert.False(rule.RestoreAudioOnExit);
             Assert.True(rule.AutoJoinVoiceChannel);
-            Assert.Equal("1255119234934116435", rule.VoiceChannelTarget);
+            Assert.Equal("2223334445556667778", rule.VoiceChannelTarget);
             Assert.Equal("1525689872621", rule.DiscordRpcClientId);
             Assert.True(rule.DeferRestoreWhileDiscordInVoice);
         });
