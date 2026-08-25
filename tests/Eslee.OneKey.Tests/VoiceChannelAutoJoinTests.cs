@@ -332,8 +332,32 @@ internal sealed class FakeVoiceChannelClient : IDiscordVoiceChannelClient
         return connection;
     }
 
+    public async Task<DiscordRpcConnection> EnsureConnectedAsync(CancellationToken cancellationToken)
+    {
+        if (Connected)
+        {
+            return new DiscordRpcConnection(DiscordRpcStatus.Connected);
+        }
+        return await ConnectAsync(cancellationToken);
+    }
+
+    public Task DisconnectAsync(CancellationToken cancellationToken)
+    {
+        Connected = false;
+        Disconnects++;
+        return Task.CompletedTask;
+    }
+
+    /// <summary>연결을 끊은 횟수입니다. 오류 후 재연결을 확인합니다.</summary>
+    public int Disconnects { get; private set; }
+
+    /// <summary>설정하면 조회가 예외를 던집니다(RPC 오류 재현용).</summary>
+    public Exception? ThrowOnGetSelected { get; set; }
+
     public Task<string?> GetSelectedVoiceChannelIdAsync(CancellationToken cancellationToken) =>
-        Task.FromResult(CurrentChannelId);
+        ThrowOnGetSelected is null
+            ? Task.FromResult(CurrentChannelId)
+            : Task.FromException<string?>(ThrowOnGetSelected);
 
     public Task SelectVoiceChannelAsync(string channelId, CancellationToken cancellationToken)
     {

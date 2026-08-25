@@ -36,7 +36,6 @@ public partial class MainWindow : Window
     private bool _loadingRule;
     private AutomationEngine? _engine;
     private AutomationCoordinator? _coordinator;
-    private HttpClient? _httpClient;
     private TrayIconService? _tray;
     private TrayFolderLink? _trayFolderLink;
     private DiscordRpcVoiceChannelClient? _rpcVoiceClient;
@@ -233,8 +232,6 @@ public partial class MainWindow : Window
             await _coordinator.DisposeAsync();
             _coordinator = null;
         }
-        _httpClient?.Dispose();
-        _httpClient = null;
         if (_engine is not null)
         {
             // 이전 세션의 음성채널 재시도가 새 세션에 남지 않게 한다.
@@ -256,12 +253,12 @@ public partial class MainWindow : Window
             return;
         }
 
-        var apiToken = await _secretStore.LoadDiscordApiTokenAsync(CancellationToken.None) ?? string.Empty;
-        _httpClient = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
-        var voiceClient = new DiscordVoiceStatusClient(
-            _httpClient,
-            _automation.DiscordApiBaseUrl,
-            apiToken);
+        // 통화 상태는 로컬 Discord에 직접 묻는다. 자동 입장과 같은 RPC 연결을 함께 쓴다.
+        EnsureRpcVoiceClient(_automation);
+        var voiceClient = new DiscordRpcVoiceStatusClient(
+            () => _rpcVoiceClient,
+            _processes,
+            _automation.DiscordProcessName);
         _engine = new AutomationEngine(
             _automation,
             _audio,
@@ -575,11 +572,29 @@ public partial class MainWindow : Window
             return null;
         }
 
-        _rpcVoiceClient = new DiscordRpcVoiceChannelClient(
+        var client = EnsureRpcVoiceClient(rule);
+        return client is null ? null : new VoiceChannelAutoJoin(client, _logger);
+    }
+
+    /// <summary>
+    /// 자동 입장과 통화 상태 조회가 함께 쓰는 RPC 연결입니다. 하나만 만들어 재사용합니다.
+    /// Discord는 연결을 끊은 직후 한동안 새 연결을 거부하므로, 조회할 때마다 새로 만들면
+    /// 안 됩니다. 자동화를 다시 적용할 때 통째로 정리하고 다시 만듭니다.
+    /// </summary>
+    private DiscordRpcVoiceChannelClient? EnsureRpcVoiceClient(AutomationSettings rule)
+    {
+        if (!rule.UseDiscordIntegration ||
+            string.IsNullOrWhiteSpace(rule.DiscordRpcClientId) ||
+            _logger is null)
+        {
+            return null;
+        }
+
+        _rpcVoiceClient ??= new DiscordRpcVoiceChannelClient(
             rule.DiscordRpcClientId,
             async cancellationToken => (await GetUsableRpcTokensAsync(cancellationToken))?.AccessToken,
             TimeSpan.FromSeconds(20));
-        return new VoiceChannelAutoJoin(_rpcVoiceClient, _logger);
+        return _rpcVoiceClient;
     }
 
     private async Task<DiscordRpcTokens?> LoadRpcTokensAsync(CancellationToken cancellationToken)
@@ -1204,8 +1219,6 @@ public partial class MainWindow : Window
             await _coordinator.DisposeAsync();
             _coordinator = null;
         }
-        _httpClient?.Dispose();
-        _httpClient = null;
         if (_engine is not null)
         {
             _engine.StateChanged -= Engine_StateChanged;
