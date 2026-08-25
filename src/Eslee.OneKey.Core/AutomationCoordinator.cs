@@ -81,12 +81,15 @@ public sealed class AutomationCoordinator : IAsyncDisposable
 
     public void SetPaused(bool paused) => IsPaused = paused;
 
-    /// <summary>지정한 계정으로 자동화를 시작합니다.</summary>
+    /// <summary>
+    /// 지정한 계정으로 자동화를 시작합니다. 이미 자동화가 돌고 있으면 계정만 바꾸므로
+    /// 사용자가 먼저 자동화를 끝낼 필요가 없습니다.
+    /// </summary>
     public async Task HandleAccountHotkeyAsync(GameAccountProfile profile)
     {
         if (!IsPaused)
         {
-            await _engine.StartAsync(AutomationTrigger.Hotkey, profile, LifetimeToken);
+            await _engine.StartOrSwitchAccountAsync(profile, LifetimeToken);
         }
     }
 

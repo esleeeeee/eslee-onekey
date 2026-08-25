@@ -95,6 +95,14 @@ public interface IGameSessionService
         GameAccountProfile profile,
         CancellationToken cancellationToken);
 
+    /// <summary>
+    /// 세션을 바꿔 넣고 런처를 다시 띄운 뒤, 런처가 그 세션을 받아들였는지 확인합니다.
+    /// 확실한 신호가 없으면 실패로 판정하지 않습니다.
+    /// </summary>
+    Task<GameSessionResult> ConfirmActiveAsync(
+        GameAccountProfile profile,
+        CancellationToken cancellationToken);
+
     /// <summary>저장된 세션을 지웁니다(프로필 삭제 시).</summary>
     Task ForgetAsync(Guid profileId, CancellationToken cancellationToken);
 }
