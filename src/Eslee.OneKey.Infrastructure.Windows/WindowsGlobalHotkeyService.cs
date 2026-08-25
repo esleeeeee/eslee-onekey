@@ -8,13 +8,16 @@ namespace Eslee.OneKey.Infrastructure.Windows;
 public sealed class WindowsGlobalHotkeyService : IHotkeyService
 {
     private const int WmHotkey = 0x0312;
-    private const int HotkeyId = 0x4F4B;
+    private const int FirstHotkeyId = 0x4F4B;
+    private static int _lastHotkeyId = FirstHotkeyId - 1;
     private readonly IntPtr _windowHandle;
     private readonly HwndSource _source;
+    private readonly int _hotkeyId;
     private bool _registered;
 
     public WindowsGlobalHotkeyService(IntPtr windowHandle)
     {
+        _hotkeyId = NextHotkeyId();
         _windowHandle = windowHandle;
         _source = HwndSource.FromHwnd(windowHandle)
             ?? throw new InvalidOperationException("WPF window source를 찾을 수 없습니다.");
@@ -39,7 +42,7 @@ public sealed class WindowsGlobalHotkeyService : IHotkeyService
             | (gesture.Shift ? 0x0004u : 0u)
             | (gesture.Windows ? 0x0008u : 0u)
             | 0x4000u;
-        _registered = RegisterHotKey(_windowHandle, HotkeyId, modifiers, virtualKey);
+        _registered = RegisterHotKey(_windowHandle, _hotkeyId, modifiers, virtualKey);
         if (_registered)
         {
             return Task.FromResult(new HotkeyRegistrationResult(true));
@@ -55,7 +58,7 @@ public sealed class WindowsGlobalHotkeyService : IHotkeyService
     {
         if (_registered)
         {
-            UnregisterHotKey(_windowHandle, HotkeyId);
+            UnregisterHotKey(_windowHandle, _hotkeyId);
             _registered = false;
         }
     }
@@ -74,7 +77,7 @@ public sealed class WindowsGlobalHotkeyService : IHotkeyService
         IntPtr longParameter,
         ref bool handled)
     {
-        if (message == WmHotkey && wordParameter.ToInt32() == HotkeyId)
+        if (IsOwnHotkeyMessage(message, wordParameter, _hotkeyId))
         {
             handled = true;
             _ = InvokePressedAsync();
@@ -93,6 +96,26 @@ public sealed class WindowsGlobalHotkeyService : IHotkeyService
             await handler();
         }
     }
+
+    /// <summary>
+    /// 인스턴스마다 다른 단축키 ID를 발급합니다. 같은 창에 같은 ID로 등록하면 Windows는
+    /// 두 단축키를 함께 유지하지만 WM_HOTKEY의 wParam이 같아져, 어떤 조합을 눌렀는지
+    /// 구분할 수 없게 됩니다. 그러면 단축키 하나를 눌러도 모든 인스턴스가 함께 반응합니다.
+    /// </summary>
+    public static int NextHotkeyId()
+    {
+        var id = Interlocked.Increment(ref _lastHotkeyId);
+        if (id > 0xBFFF)
+        {
+            // 애플리케이션용 ID 범위를 벗어나면 조용히 오작동하지 않고 등록에서 실패시킨다.
+            throw new InvalidOperationException("단축키 ID를 모두 사용했습니다.");
+        }
+        return id;
+    }
+
+    /// <summary>이 인스턴스가 등록한 단축키가 눌렸을 때만 참입니다.</summary>
+    public static bool IsOwnHotkeyMessage(int message, IntPtr wordParameter, int hotkeyId) =>
+        message == WmHotkey && wordParameter.ToInt32() == hotkeyId;
 
     private static bool TryGetVirtualKey(string key, out uint virtualKey)
     {
