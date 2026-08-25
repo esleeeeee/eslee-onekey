@@ -154,13 +154,14 @@ public sealed class DiscordRpcVoiceStatusTests
     }
 
     [Fact]
-    public async Task ADeadPipeIsRebuiltInsteadOfBeingTreatedAsConnected()
+    public async Task ADeadPipeIsRebuiltWithoutFailingTheCheck()
     {
         var (status, rpc, _) = Create();
         await status.CheckAsync(CancellationToken.None);
         Assert.Equal(1, rpc.ConnectAttempts);
 
-        // Discord를 다시 시작하면 객체는 남아 있어도 파이프는 죽어 있다.
+        // Discord를 다시 시작하면 파이프가 죽는다. 실제 파이프는 입출력을 해 보기
+        // 전까지 연결됐다고 답하므로, 써 보고 나서 다시 연결해야 한다.
         rpc.PipeAlive = false;
         var check = await status.CheckAsync(CancellationToken.None);
 
@@ -184,10 +185,12 @@ public sealed class DiscordRpcVoiceStatusTests
         Assert.Equal(1, rpc.ConnectAttempts);
 
         // Discord를 다시 시작하면 파이프가 죽고 통화에서도 빠져 있다.
-        // 죽은 파이프를 그대로 쓰면 자동 입장이 앱을 다시 켤 때까지 살아나지 못한다.
         rpc.PipeAlive = false;
         rpc.CurrentChannelId = null;
         rpc.SelectedChannels.Clear();
+
+        // 재시작 후 첫 시도가 그대로 성공해야 한다. 실패했다가 다음 시도에 살아나는
+        // 방식이면 자동화가 켜질 때마다 한 번씩 입장에 실패한다.
         var result = await join.EnsureJoinedAsync(settings, CancellationToken.None);
 
         Assert.Equal(2, rpc.ConnectAttempts);
