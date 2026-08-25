@@ -8,12 +8,14 @@ namespace Eslee.OneKey.Infrastructure.Windows;
 /// (gameProcessName, gameExecutablePath)을 사용했고 Discord 연동이 항상 켜져
 /// 있었다. v2는 범용 속성명(watchProcessName, launchExecutablePath)과
 /// 명시적 useDiscordIntegration 플래그를 사용한다. v3은 종료 후 오디오
-/// 자동 복원을 restoreAudioOnExit 옵션으로 분리한다.
+/// 자동 복원을 restoreAudioOnExit 옵션으로 분리한다. v5는 단축키를 자동화 규칙
+/// 하나로 모은다. 그전에는 계정 프로필도 단축키를 들고 있어 같은 조합이 두 번
+/// 등록되는 일이 있었다.
 /// 기존 파일을 읽지 못해 설정이 초기화되는 일이 없도록 로드 시 변환한다.
 /// </summary>
 public static class SettingsMigration
 {
-    public const int CurrentSchemaVersion = 4;
+    public const int CurrentSchemaVersion = 6;
 
     public static JsonNode Migrate(JsonNode? root)
     {
@@ -45,8 +47,122 @@ public static class SettingsMigration
                 MigrateAutomationToV4(automation);
             }
         }
+        if (version < 5)
+        {
+            MigrateToV5(settings);
+        }
+        if (version < 6)
+        {
+            MigrateToV6(settings);
+        }
         settings["schemaVersion"] = CurrentSchemaVersion;
         return settings;
+    }
+
+    /// <summary>
+    /// v5까지는 Discord 연결 값이 자동화마다 따로 있었습니다. 자동화를 바꿀 때마다
+    /// 다른 값이 보여서, 앱 전체에 하나만 두도록 끌어올립니다. 자동화 쪽 값은 지우지
+    /// 않습니다. 실행할 때 전역 값을 각 자동화에 얹어 쓰므로 그대로 두어도 무해하고,
+    /// 예전 버전으로 되돌아가도 설정이 남아 있습니다.
+    /// </summary>
+    private static void MigrateToV6(JsonObject settings)
+    {
+        var automations = (settings["automations"] as JsonArray)?.OfType<JsonObject>().ToList() ?? [];
+        foreach (var name in new[]
+        {
+            "discordRpcClientId",
+            "discordApiBaseUrl",
+            "discordExecutablePath",
+            "discordProcessName",
+        })
+        {
+            if (settings[name] is not null)
+            {
+                continue;
+            }
+
+            // 여러 자동화가 있으면 값이 들어 있는 첫 자동화를 기준으로 삼습니다.
+            var value = automations
+                .Select(automation => (string?)automation[name])
+                .FirstOrDefault(candidate => !string.IsNullOrWhiteSpace(candidate));
+            if (value is not null)
+            {
+                settings[name] = value;
+            }
+        }
+    }
+
+    /// <summary>
+    /// v4까지는 계정 프로필이 단축키를 들고 있었고, 자동화도 따로 단축키를 갖고
+    /// 있었습니다. 같은 조합이 두 번 등록되면 Windows가 어느 쪽이 눌렸는지 구분하지
+    /// 못하므로, 단축키를 자동화 규칙 한 곳으로 모읍니다.
+    ///
+    /// 계정 프로필마다 그 계정을 쓰는 자동화 규칙을 만들되, 실행 파일·감시 프로세스·
+    /// 오디오·Discord·복원 정책은 기존 자동화의 값을 그대로 물려줍니다. 첫 프로필은
+    /// 기존 자동화를 그대로 이어받으므로 설정이 하나도 사라지지 않습니다.
+    /// </summary>
+    private static void MigrateToV5(JsonObject settings)
+    {
+        var automations = settings["automations"] as JsonArray;
+        var profiles = settings["accountProfiles"] as JsonArray;
+
+        var hotkeyed = profiles?
+            .OfType<JsonObject>()
+            .Where(profile => profile["hotkey"] is JsonObject)
+            .ToList() ?? [];
+
+        if (automations is { Count: > 0 } && hotkeyed.Count > 0)
+        {
+            var template = (JsonObject)automations[0]!;
+            var rules = new JsonArray();
+            foreach (var profile in hotkeyed)
+            {
+                var rule = (JsonObject)template.DeepClone();
+                // 첫 규칙은 기존 자동화를 그대로 이어받으므로 id도 유지합니다.
+                if (rule != hotkeyed[0] && !ReferenceEquals(profile, hotkeyed[0]))
+                {
+                    rule["id"] = Guid.NewGuid().ToString();
+                }
+                rule["name"] = RuleName(template, profile);
+                rule["hotkey"] = profile["hotkey"]!.DeepClone();
+                rule["accountProfileId"] = profile["id"]?.DeepClone();
+                rules.Add(rule);
+            }
+
+            // 계정을 쓰지 않던 나머지 자동화는 그대로 둡니다.
+            foreach (var extra in automations.OfType<JsonObject>().Skip(1))
+            {
+                rules.Add(extra.DeepClone());
+            }
+            settings["automations"] = rules;
+        }
+
+        foreach (var profile in profiles?.OfType<JsonObject>() ?? [])
+        {
+            profile.Remove("hotkey");
+        }
+
+        foreach (var automation in (settings["automations"] as JsonArray)?.OfType<JsonObject>() ?? [])
+        {
+            automation["id"] ??= Guid.NewGuid().ToString();
+        }
+    }
+
+    /// <summary>
+    /// 규칙 이름은 사용자가 이미 쓰던 이름과 프로필 이름을 붙여 만듭니다. 특정 게임
+    /// 이름을 코드에 넣지 않기 위해 값은 모두 설정 파일에서 가져옵니다.
+    /// </summary>
+    private static string RuleName(JsonObject template, JsonObject profile)
+    {
+        var profileName = (string?)profile["name"];
+        var automationName = (string?)template["name"];
+        if (string.IsNullOrWhiteSpace(profileName))
+        {
+            return string.IsNullOrWhiteSpace(automationName) ? "새 자동화" : automationName;
+        }
+        return string.IsNullOrWhiteSpace(automationName)
+            ? profileName
+            : $"{automationName} - {profileName}";
     }
 
     private static int ReadSchemaVersion(JsonObject settings) =>

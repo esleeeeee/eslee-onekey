@@ -16,7 +16,65 @@ public sealed class DiscordRpcVoiceChannelClient(
 {
     private DiscordRpcPipe? _pipe;
 
+    /// <summary>
+    /// 파이프 하나를 여러 기능이 함께 씁니다. 요청과 응답 한 쌍을 통째로 묶지 않으면
+    /// 동시에 부른 쪽이 남의 응답 프레임을 읽어 버리고, 그 프레임은 nonce가 다르다는
+    /// 이유로 버려집니다. 그러면 원래 주인은 응답을 영영 못 받습니다. 프레임을 읽는
+    /// 도중에 겹치면 헤더와 본문이 뒤섞여 스트림 자체가 깨집니다.
+    /// </summary>
+    private readonly SemaphoreSlim _gate = new(1, 1);
+
+    /// <summary>
+    /// 지금 파이프가 실제로 살아 있는지 여부입니다. 객체가 남아 있는 것과 연결이
+    /// 살아 있는 것은 다릅니다. Discord를 다시 시작하면 파이프만 죽어 있습니다.
+    /// </summary>
+    public bool IsConnected => _pipe is { IsConnected: true };
+
+    public async Task<DiscordRpcConnection> EnsureConnectedAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            return IsConnected
+                ? new DiscordRpcConnection(DiscordRpcStatus.Connected)
+                : await ConnectCoreAsync(cancellationToken);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    public async Task DisconnectAsync(CancellationToken cancellationToken)
+    {
+        cancellationToken.ThrowIfCancellationRequested();
+        await _gate.WaitAsync(CancellationToken.None);
+        try
+        {
+            await ClosePipeAsync();
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
     public async Task<DiscordRpcConnection> ConnectAsync(CancellationToken cancellationToken)
+    {
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            return await ConnectCoreAsync(cancellationToken);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    /// <summary>호출자가 이미 게이트를 쥐고 있다고 가정합니다.</summary>
+    private async Task<DiscordRpcConnection> ConnectCoreAsync(CancellationToken cancellationToken)
     {
         if (string.IsNullOrWhiteSpace(clientId))
         {
@@ -33,7 +91,7 @@ public sealed class DiscordRpcVoiceChannelClient(
                 "Discord RPC 연결이 없습니다. 설정에서 Discord 연결을 먼저 수행하세요.");
         }
 
-        await DisposeAsync();
+        await ClosePipeAsync();
         var deadline = DateTimeOffset.UtcNow + readyTimeout;
         while (true)
         {
@@ -70,7 +128,8 @@ public sealed class DiscordRpcVoiceChannelClient(
             await Task.Delay(TimeSpan.FromMilliseconds(500), cancellationToken);
         }
 
-        var (_, authenticateError) = await SendCommandAsync(
+        // 재연결 경로를 타지 않도록 교환만 직접 부른다. 여기서 다시 연결하면 재귀가 된다.
+        var (_, authenticateError) = await ExchangeAsync(
             "AUTHENTICATE",
             new { access_token = accessToken },
             cancellationToken);
@@ -86,7 +145,20 @@ public sealed class DiscordRpcVoiceChannelClient(
 
     public async Task<string?> GetSelectedVoiceChannelIdAsync(CancellationToken cancellationToken)
     {
-        var (data, error) = await SendCommandAsync(
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            return await GetSelectedVoiceChannelIdCoreAsync(cancellationToken);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    private async Task<string?> GetSelectedVoiceChannelIdCoreAsync(CancellationToken cancellationToken)
+    {
+        var (data, error) = await SendCommandCoreAsync(
             "GET_SELECTED_VOICE_CHANNEL",
             new { },
             cancellationToken);
@@ -104,7 +176,20 @@ public sealed class DiscordRpcVoiceChannelClient(
 
     public async Task SelectVoiceChannelAsync(string channelId, CancellationToken cancellationToken)
     {
-        var (_, error) = await SendCommandAsync(
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            await SelectVoiceChannelCoreAsync(channelId, cancellationToken);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    private async Task SelectVoiceChannelCoreAsync(string channelId, CancellationToken cancellationToken)
+    {
+        var (_, error) = await SendCommandCoreAsync(
             "SELECT_VOICE_CHANNEL",
             // force=false: 이미 다른 통화 중이면 Discord가 옮기지 않는다.
             new { channel_id = channelId, force = false },
@@ -116,7 +201,93 @@ public sealed class DiscordRpcVoiceChannelClient(
     }
 
     /// <summary>성공하면 (data, null), 오류 응답이면 (null, 사유)를 돌려줍니다.</summary>
-    private async Task<(JsonElement? Data, string? Error)> SendCommandAsync<T>(
+    public async Task<IReadOnlyList<DiscordGuild>> GetGuildsAsync(CancellationToken cancellationToken)
+    {
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            var (data, error) = await SendCommandCoreAsync("GET_GUILDS", new { }, cancellationToken);
+            if (error is not null)
+            {
+                throw new InvalidOperationException($"서버 목록을 가져오지 못했습니다({error}).");
+            }
+            if (data is null || !data.Value.TryGetProperty("guilds", out var guilds))
+            {
+                return [];
+            }
+            return [.. guilds.EnumerateArray()
+                .Select(guild => new DiscordGuild(
+                    guild.TryGetProperty("id", out var id) ? id.GetString() ?? string.Empty : string.Empty,
+                    guild.TryGetProperty("name", out var name) ? name.GetString() ?? string.Empty : string.Empty))
+                .Where(guild => guild.Id.Length > 0)];
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    public async Task<IReadOnlyList<DiscordVoiceChannel>> GetVoiceChannelsAsync(
+        string guildId,
+        CancellationToken cancellationToken)
+    {
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            var (data, error) = await SendCommandCoreAsync(
+                "GET_CHANNELS",
+                new { guild_id = guildId },
+                cancellationToken);
+            if (error is not null)
+            {
+                throw new InvalidOperationException($"음성채널 목록을 가져오지 못했습니다({error}).");
+            }
+            if (data is null || !data.Value.TryGetProperty("channels", out var channels))
+            {
+                return [];
+            }
+            // type 2가 음성채널입니다.
+            return [.. channels.EnumerateArray()
+                .Where(channel => channel.TryGetProperty("type", out var type) && type.GetInt32() == 2)
+                .Select(channel => new DiscordVoiceChannel(
+                    channel.TryGetProperty("id", out var id) ? id.GetString() ?? string.Empty : string.Empty,
+                    channel.TryGetProperty("name", out var name) ? name.GetString() ?? string.Empty : string.Empty))
+                .Where(channel => channel.Id.Length > 0)];
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    /// <summary>게이트를 쥔 상태에서만 부릅니다. 요청과 응답이 한 쌍으로 묶여야 합니다.</summary>
+    private async Task<(JsonElement? Data, string? Error)> SendCommandCoreAsync<T>(
+        string command,
+        T args,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
+            return await ExchangeAsync(command, args, cancellationToken);
+        }
+        catch (Exception exception) when (exception is IOException or ObjectDisposedException)
+        {
+            // NamedPipeClientStream.IsConnected는 마지막으로 성공한 입출력 기준이라,
+            // Discord가 죽어도 참을 계속 돌려줍니다. 그래서 끊긴 것은 실제로 써 보고
+            // 나서야 알 수 있습니다. Discord를 다시 시작하면 남아 있던 파이프가 바로
+            // 이 상태가 되므로, 버리고 한 번만 다시 연결해 그대로 이어 갑니다.
+            // 그러지 않으면 재시작 후 첫 호출이 늘 실패합니다.
+            await ClosePipeAsync();
+            var reconnected = await ConnectCoreAsync(cancellationToken);
+            if (reconnected.Status != DiscordRpcStatus.Connected)
+            {
+                throw;
+            }
+            return await ExchangeAsync(command, args, cancellationToken);
+        }
+    }
+
+    private async Task<(JsonElement? Data, string? Error)> ExchangeAsync<T>(
         string command,
         T args,
         CancellationToken cancellationToken)
@@ -169,6 +340,19 @@ public sealed class DiscordRpcVoiceChannelClient(
     }
 
     public async ValueTask DisposeAsync()
+    {
+        await _gate.WaitAsync(CancellationToken.None);
+        try
+        {
+            await ClosePipeAsync();
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    private async Task ClosePipeAsync()
     {
         if (_pipe is not null)
         {

@@ -2,6 +2,9 @@ namespace Eslee.OneKey.Core;
 
 public sealed class AutomationEngine : IAsyncDisposable
 {
+    /// <summary>계정 전환으로 다시 띄운 런처의 종료 이벤트를 무시하는 시간입니다.</summary>
+    private static readonly TimeSpan LauncherRestartGrace = TimeSpan.FromSeconds(30);
+
     private static readonly HashSet<AutomationState> BusyStates =
     [
         AutomationState.Starting,
@@ -10,14 +13,16 @@ public sealed class AutomationEngine : IAsyncDisposable
         AutomationState.Restoring,
     ];
 
-    private readonly AutomationSettings _settings;
+    private AutomationSettings _settings;
     private readonly IAudioEndpointService _audio;
     private readonly IProcessService _processes;
     private readonly IDiscordVoiceStatusClient _discordVoice;
     private readonly ISessionStore _sessions;
     private readonly ISystemClock _clock;
     private readonly IAppLogger _logger;
-    private readonly VoiceChannelAutoJoin? _voiceChannelAutoJoin;
+    private VoiceChannelAutoJoin? _voiceChannelAutoJoin;
+    private readonly IGameSessionService? _accountSessions;
+    private DateTimeOffset? _launcherRestartedAt;
     private readonly SemaphoreSlim _gate = new(1, 1);
 
     /// <summary>
@@ -50,9 +55,11 @@ public sealed class AutomationEngine : IAsyncDisposable
         ISessionStore sessions,
         ISystemClock clock,
         IAppLogger logger,
-        VoiceChannelAutoJoin? voiceChannelAutoJoin = null)
+        VoiceChannelAutoJoin? voiceChannelAutoJoin = null,
+        IGameSessionService? accountSessions = null)
     {
         _voiceChannelAutoJoin = voiceChannelAutoJoin;
+        _accountSessions = accountSessions;
         _settings = settings;
         _audio = audio;
         _processes = processes;
@@ -74,8 +81,17 @@ public sealed class AutomationEngine : IAsyncDisposable
     public bool KeptCurrentDevice { get; private set; }
     public event EventHandler? StateChanged;
 
+    public Task<AutomationStartResult> StartAsync(
+        AutomationTrigger trigger,
+        CancellationToken cancellationToken = default) =>
+        StartAsync(trigger, accountProfile: null, cancellationToken);
+
+    /// <param name="accountProfile">
+    /// 실행 전에 활성화할 계정 프로필입니다. null이면 계정을 건드리지 않습니다.
+    /// </param>
     public async Task<AutomationStartResult> StartAsync(
         AutomationTrigger trigger,
+        GameAccountProfile? accountProfile,
         CancellationToken cancellationToken = default)
     {
         await _gate.WaitAsync(cancellationToken);
@@ -88,6 +104,208 @@ public sealed class AutomationEngine : IAsyncDisposable
                 return AutomationStartResult.Ignored(reason);
             }
 
+            return await StartCoreAsync(trigger, accountProfile, cancellationToken);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    /// <summary>
+    /// 규칙마다 Discord 설정이 다를 수 있으므로, 규칙이 바뀌면 그 규칙에 맞는 음성채널
+    /// 자동 입장을 다시 만들어 씁니다. 비워 두면 생성자에서 받은 것을 계속 씁니다.
+    /// </summary>
+    public Func<AutomationSettings, VoiceChannelAutoJoin?>? VoiceChannelAutoJoinFactory { get; set; }
+
+    /// <summary>지금 자동화가 쓰고 있는 규칙입니다.</summary>
+    public AutomationSettings ActiveRule => _settings;
+
+    /// <summary>
+    /// 자동화 규칙 하나를 시작합니다. 이미 같은 실행 환경으로 돌고 있고 계정만 다르면
+    /// 오디오와 Discord는 그대로 둔 채 계정만 바꿉니다. 실행 환경까지 다르면 돌고 있는
+    /// 자동화를 건드리지 않고 무시합니다.
+    /// </summary>
+    public async Task<AutomationStartResult> StartRuleAsync(
+        AutomationSettings rule,
+        GameAccountProfile? accountProfile,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(rule);
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            if (BusyStates.Contains(State))
+            {
+                if (accountProfile is not null && SharesExecutionEnvironment(_settings, rule))
+                {
+                    _settings = rule;
+                    return await SwitchAccountCoreAsync(accountProfile, cancellationToken);
+                }
+
+                const string reason = "동일 자동화가 이미 실행 중이어서 중복 트리거를 무시했습니다.";
+                _logger.Info("duplicate-trigger", reason);
+                return AutomationStartResult.Ignored(reason);
+            }
+
+            UseRule(rule);
+            return await StartCoreAsync(AutomationTrigger.Hotkey, accountProfile, cancellationToken);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    private void UseRule(AutomationSettings rule)
+    {
+        _settings = rule;
+        if (VoiceChannelAutoJoinFactory is { } factory)
+        {
+            _voiceChannelAutoJoin = factory(rule);
+        }
+    }
+
+    /// <summary>
+    /// 실행 파일, 감시 프로세스, 오디오 장치, Discord 설정이 모두 같은지 봅니다. 이름과
+    /// 단축키, 계정만 다른 규칙이면 환경을 다시 준비할 이유가 없습니다.
+    /// </summary>
+    private static bool SharesExecutionEnvironment(AutomationSettings a, AutomationSettings b) =>
+        Comparable(a) == Comparable(b);
+
+    private static AutomationSettings Comparable(AutomationSettings rule) => rule with
+    {
+        Id = Guid.Empty,
+        Name = string.Empty,
+        Enabled = true,
+        Hotkey = new HotkeyGesture(),
+        AccountProfileId = null,
+    };
+
+    /// <summary>
+    /// 계정 단축키 전용 진입점입니다. 자동화 환경이 이미 준비돼 있으면 계정만 바꾸고
+    /// 오디오와 Discord는 그대로 둡니다. 준비 전이면 평소대로 전체 자동화를 시작합니다.
+    /// 계정을 바꾸려고 사용자가 먼저 자동화를 끝낼 필요는 없어야 합니다.
+    /// </summary>
+    public async Task<AutomationStartResult> StartOrSwitchAccountAsync(
+        GameAccountProfile profile,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(profile);
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            return BusyStates.Contains(State)
+                ? await SwitchAccountCoreAsync(profile, cancellationToken)
+                : await StartCoreAsync(AutomationTrigger.Hotkey, profile, cancellationToken);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    /// <summary>
+    /// 계정만 바꿉니다. 자동화를 시작하지도, 끝내지도 않습니다. 자동화가 실행 중일 때
+    /// 계정 단축키가 쓰는 경로와 같습니다. UI의 계정 전환 버튼이 이걸 부릅니다.
+    /// </summary>
+    public async Task<AutomationStartResult> SwitchAccountAsync(
+        GameAccountProfile profile,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(profile);
+        await _gate.WaitAsync(cancellationToken);
+        try
+        {
+            return await SwitchAccountCoreAsync(profile, cancellationToken);
+        }
+        finally
+        {
+            _gate.Release();
+        }
+    }
+
+    /// <summary>
+    /// 실행 중인 자동화는 그대로 두고 계정만 바꿉니다. 오디오 복원, Discord 재입장,
+    /// 환경 재준비는 하지 않습니다.
+    /// </summary>
+    private async Task<AutomationStartResult> SwitchAccountCoreAsync(
+        GameAccountProfile profile,
+        CancellationToken cancellationToken)
+    {
+        if (_accountSessions is null)
+        {
+            return AutomationStartResult.Ignored("계정 전환 기능을 쓸 수 없습니다.");
+        }
+
+        try
+        {
+            var result = await ActivateAccountAsync(profile, cancellationToken);
+            if (result.Outcome == GameSessionOutcome.AlreadyActive)
+            {
+                const string reason = "이미 이 계정이라 런처를 다시 시작하지 않았습니다.";
+                _logger.Info("account-already-active", reason);
+                return AutomationStartResult.Ignored(reason);
+            }
+
+            if (result.Outcome != GameSessionOutcome.Switched)
+            {
+                // 실행 중인 자동화는 건드리지 않고 실패만 알린다.
+                return FailSwitch(result.Message ?? "계정 전환에 실패했습니다.");
+            }
+
+            LastError = null;
+            await StartLauncherAsync(cancellationToken);
+            var confirmation = await _accountSessions.ConfirmActiveAsync(profile, cancellationToken);
+            if (confirmation.Outcome == GameSessionOutcome.NeedsEnrollment)
+            {
+                return FailSwitch(confirmation.Message ?? "런처가 저장된 세션을 거부했습니다.");
+            }
+
+            _logger.Info("account-switched", "실행 중인 자동화를 유지한 채 계정을 전환했습니다.");
+            RaiseStateChanged();
+            return AutomationStartResult.Success();
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            // 런처 실행 파일이 사라졌거나 세션 파일을 읽지 못하는 경우입니다. 실행 중인
+            // 자동화를 끝내지는 않되, 조용히 삼키면 사용자는 전환된 줄 알게 됩니다.
+            _logger.Error("account-switch-failed", exception, "계정 전환에 실패했습니다.");
+            return FailSwitch(exception.Message);
+        }
+    }
+
+    /// <summary>
+    /// 전환 실패를 기록하고 화면에 반영합니다. 자동화 상태는 그대로 두므로 상태 변경
+    /// 알림을 따로 보내지 않으면 사용자는 실패를 영영 보지 못합니다.
+    /// </summary>
+    private AutomationStartResult FailSwitch(string message)
+    {
+        LastError = message;
+        RaiseStateChanged();
+        return AutomationStartResult.Ignored(message);
+    }
+
+    /// <summary>계정을 바꾼 뒤 런처를 다시 띄웁니다.</summary>
+    private async Task StartLauncherAsync(CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(_settings.LaunchExecutablePath))
+        {
+            return;
+        }
+
+        await _processes.StartAsync(_settings.LaunchExecutablePath, cancellationToken);
+        _launcherRestartedAt = _clock.UtcNow;
+        _logger.Info("launch-restarted", "계정을 바꾼 뒤 실행 파일을 다시 시작했습니다.");
+    }
+
+    private async Task<AutomationStartResult> StartCoreAsync(
+        AutomationTrigger trigger,
+        GameAccountProfile? accountProfile,
+        CancellationToken cancellationToken)
+    {
+        try
+        {
             if (!_settings.Enabled)
             {
                 return AutomationStartResult.Ignored("자동화가 비활성화되어 있습니다.");
@@ -99,36 +317,26 @@ public sealed class AutomationEngine : IAsyncDisposable
             KeptCurrentDevice = false;
             _logger.Info("automation-start", $"자동화를 시작합니다. trigger={trigger}");
 
-            var currentEndpointId = await _audio.GetDefaultOutputIdAsync(cancellationToken);
-            if (string.IsNullOrWhiteSpace(currentEndpointId))
+            // 계정 전환은 오디오나 실행 파일을 건드리기 전에 끝낸다. 전환할 수 없으면
+            // 아무것도 바꾸지 않은 상태로 멈추는 편이 안전하다.
+            var account = await ActivateAccountAsync(accountProfile, cancellationToken);
+            if (!account.CanContinue)
             {
-                throw new InvalidOperationException("현재 기본 오디오 출력장치를 확인할 수 없습니다.");
+                LastError = account.Message ?? "계정 전환에 실패했습니다.";
+                SetState(AutomationState.Failed);
+                return AutomationStartResult.Ignored(LastError);
             }
 
-            _startEntryEndpointId = currentEndpointId;
-
-            // 이전 실행에서 전환한 장치가 아직 기본값이면(복원을 건너뛴 경우) 그때의
-            // 원래 장치를 계속 복원 대상으로 둔다. 그러지 않으면 두 번째 실행부터
-            // 원래 장치 기록이 전환 대상 장치로 덮어써진다.
-            if (string.IsNullOrWhiteSpace(_originalAudioEndpointId) ||
-                currentEndpointId != _managedAudioEndpointId)
+            // 출력 장치를 지정하지 않은 자동화는 오디오를 건드리지 않는다. 실행이나
+            // Discord만 쓰려는 구성이 오디오 때문에 실패하면 안 된다.
+            if (SwitchesAudio)
             {
-                _originalAudioEndpointId = currentEndpointId;
+                await SwitchAudioAsync(cancellationToken);
             }
-
-            var endpoints = await _audio.GetOutputEndpointsAsync(cancellationToken);
-            var target = endpoints.FirstOrDefault(endpoint =>
-                endpoint.IsActive && endpoint.Id == _settings.TargetAudioEndpointId);
-            if (target is null)
+            else
             {
-                throw new InvalidOperationException("지정한 헤드셋이 연결되어 있지 않습니다.");
+                _logger.Info("audio-not-managed", "이 자동화는 오디오 장치를 바꾸지 않습니다.");
             }
-
-            _logger.Info("audio-original-saved", "원래 기본 오디오 장치를 세션에 저장했습니다.");
-            await _audio.SetDefaultOutputAsync(target.Id, cancellationToken);
-            _managedAudioEndpointId = target.Id;
-            _logger.Info("audio-switched", "지정한 헤드셋으로 기본 출력을 전환했습니다.");
-            await SaveSessionAsync(cancellationToken);
 
             await EnsureLaunchTargetRunningAsync(trigger, cancellationToken);
             await EnsureDiscordRunningAsync(cancellationToken);
@@ -149,10 +357,6 @@ public sealed class AutomationEngine : IAsyncDisposable
             SetState(AutomationState.Failed);
             return AutomationStartResult.Ignored(exception.Message);
         }
-        finally
-        {
-            _gate.Release();
-        }
     }
 
     public async Task OnWatchedProcessExitedAsync(CancellationToken cancellationToken = default)
@@ -162,6 +366,21 @@ public sealed class AutomationEngine : IAsyncDisposable
         {
             if (State != AutomationState.Active)
             {
+                return;
+            }
+
+            // 감시 대상이 런처와 같은 설정에서는 계정 전환이 종료 이벤트를 만든다.
+            // 우리가 방금 닫았다 다시 띄운 것이고 지금 살아 있다면 종료가 아니다.
+            // 그러지 않으면 계정 전환이 오디오 복원과 자동화 종료를 불러온다.
+            if (_launcherRestartedAt is { } restartedAt &&
+                _clock.UtcNow - restartedAt < LauncherRestartGrace &&
+                !string.IsNullOrWhiteSpace(_settings.WatchProcessName) &&
+                await _processes.IsRunningAsync(_settings.WatchProcessName, cancellationToken))
+            {
+                _launcherRestartedAt = null;
+                _logger.Info(
+                    "watched-process-restarted-by-switch",
+                    "계정 전환으로 다시 띄운 것이라 종료로 처리하지 않았습니다.");
                 return;
             }
 
@@ -308,6 +527,43 @@ public sealed class AutomationEngine : IAsyncDisposable
         _logger.Warning("stale-session", LastError);
     }
 
+    /// <summary>출력 장치를 지정한 자동화만 오디오를 관리합니다.</summary>
+    private bool SwitchesAudio => !string.IsNullOrWhiteSpace(_settings.TargetAudioEndpointId);
+
+    private async Task SwitchAudioAsync(CancellationToken cancellationToken)
+    {
+        var currentEndpointId = await _audio.GetDefaultOutputIdAsync(cancellationToken);
+        if (string.IsNullOrWhiteSpace(currentEndpointId))
+        {
+            throw new InvalidOperationException("현재 기본 오디오 출력장치를 확인할 수 없습니다.");
+        }
+
+        _startEntryEndpointId = currentEndpointId;
+
+        // 이전 실행에서 전환한 장치가 아직 기본값이면(복원을 건너뛴 경우) 그때의
+        // 원래 장치를 계속 복원 대상으로 둔다. 그러지 않으면 두 번째 실행부터
+        // 원래 장치 기록이 전환 대상 장치로 덮어써진다.
+        if (string.IsNullOrWhiteSpace(_originalAudioEndpointId) ||
+            currentEndpointId != _managedAudioEndpointId)
+        {
+            _originalAudioEndpointId = currentEndpointId;
+        }
+
+        var endpoints = await _audio.GetOutputEndpointsAsync(cancellationToken);
+        var target = endpoints.FirstOrDefault(endpoint =>
+            endpoint.IsActive && endpoint.Id == _settings.TargetAudioEndpointId);
+        if (target is null)
+        {
+            throw new InvalidOperationException("지정한 헤드셋이 연결되어 있지 않습니다.");
+        }
+
+        _logger.Info("audio-original-saved", "원래 기본 오디오 장치를 세션에 저장했습니다.");
+        await _audio.SetDefaultOutputAsync(target.Id, cancellationToken);
+        _managedAudioEndpointId = target.Id;
+        _logger.Info("audio-switched", "지정한 헤드셋으로 기본 출력을 전환했습니다.");
+        await SaveSessionAsync(cancellationToken);
+    }
+
     private async Task EnsureLaunchTargetRunningAsync(
         AutomationTrigger trigger,
         CancellationToken cancellationToken)
@@ -324,7 +580,8 @@ public sealed class AutomationEngine : IAsyncDisposable
 
         if (string.IsNullOrWhiteSpace(_settings.LaunchExecutablePath))
         {
-            throw new InvalidOperationException("실행 파일을 설정해야 합니다.");
+            // 프로그램 실행을 끈 자동화다. 오디오나 Discord만 쓰는 구성이 있다.
+            return;
         }
 
         await _processes.StartAsync(_settings.LaunchExecutablePath, cancellationToken);
@@ -361,6 +618,24 @@ public sealed class AutomationEngine : IAsyncDisposable
             LastError = "Discord 실행에 실패했습니다. 다른 자동화 동작은 유지합니다.";
             _logger.Error("discord-launch-failed", exception, LastError);
         }
+    }
+
+    /// <summary>
+    /// 지정한 계정 프로필의 로그인 세션을 활성화합니다. 프로필이 없거나 이미 그
+    /// 계정이면 아무것도 하지 않습니다.
+    /// </summary>
+    private async Task<GameSessionResult> ActivateAccountAsync(
+        GameAccountProfile? profile,
+        CancellationToken cancellationToken)
+    {
+        if (profile is null || _accountSessions is null)
+        {
+            return new GameSessionResult(GameSessionOutcome.NotRequested);
+        }
+
+        var result = await _accountSessions.ActivateAsync(profile, cancellationToken);
+        _logger.Info("account-activation", $"계정 전환 결과: {result.Outcome}");
+        return result;
     }
 
     /// <summary>
@@ -563,6 +838,13 @@ public sealed class AutomationEngine : IAsyncDisposable
 
     private async Task RestoreIfSafeAsync(CancellationToken cancellationToken)
     {
+        if (!SwitchesAudio)
+        {
+            // 애초에 오디오를 바꾸지 않은 자동화다. 되돌릴 것이 없으니 그대로 끝낸다.
+            await CompleteAsync(cancellationToken, keepRestoreTarget: true);
+            return;
+        }
+
         if (string.IsNullOrWhiteSpace(_originalAudioEndpointId) ||
             string.IsNullOrWhiteSpace(_managedAudioEndpointId))
         {

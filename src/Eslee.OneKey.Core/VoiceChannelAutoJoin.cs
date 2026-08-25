@@ -101,7 +101,8 @@ public sealed class VoiceChannelAutoJoin(IDiscordVoiceChannelClient client, IApp
             return new VoiceJoinResult(VoiceJoinOutcome.InvalidTarget, message);
         }
 
-        var connection = await client.ConnectAsync(cancellationToken);
+        // 통화 상태 조회와 같은 연결을 함께 쓴다. 매번 새로 연결하지 않는다.
+        var connection = await client.EnsureConnectedAsync(cancellationToken);
         if (connection.Status != DiscordRpcStatus.Connected)
         {
             var outcome = connection.Status == DiscordRpcStatus.NotAuthorized

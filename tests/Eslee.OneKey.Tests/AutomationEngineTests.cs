@@ -599,6 +599,15 @@ internal sealed class FakeProcessService : IProcessService
         BroughtToFront.Add(processName);
         return Task.FromResult(true);
     }
+
+    public List<string> Stopped { get; } = [];
+
+    public Task StopAsync(string processName, CancellationToken cancellationToken)
+    {
+        Stopped.Add(processName);
+        Running.Remove(processName);
+        return Task.CompletedTask;
+    }
 }
 
 internal sealed class FakeVoiceClient : IDiscordVoiceStatusClient
@@ -664,10 +673,18 @@ internal sealed class FakeLogger : IAppLogger
 internal sealed class FakeHotkeyService : IHotkeyService
 {
     public HotkeyRegistrationResult Registration { get; set; } = new(true);
+
+    /// <summary>등록이 실제로 요청됐는지 확인합니다(중복 등록 회피 검증용).</summary>
+    public bool Registered { get; private set; }
+
     public event Func<Task>? Pressed;
     public Task<HotkeyRegistrationResult> RegisterAsync(
         HotkeyGesture gesture,
-        CancellationToken cancellationToken) => Task.FromResult(Registration);
+        CancellationToken cancellationToken)
+    {
+        Registered = true;
+        return Task.FromResult(Registration);
+    }
     public void Unregister() { }
     public ValueTask DisposeAsync() => ValueTask.CompletedTask;
     public Task RaiseAsync() => Pressed?.Invoke() ?? Task.CompletedTask;

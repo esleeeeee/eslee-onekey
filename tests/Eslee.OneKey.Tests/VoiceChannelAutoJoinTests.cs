@@ -329,11 +329,67 @@ internal sealed class FakeVoiceChannelClient : IDiscordVoiceChannelClient
         }
         var connection = _connectionResults.Count > 0 ? _connectionResults.Dequeue() : Connection;
         Connected = connection.Status == DiscordRpcStatus.Connected;
+        PipeAlive = true;
         return connection;
     }
 
-    public Task<string?> GetSelectedVoiceChannelIdAsync(CancellationToken cancellationToken) =>
-        Task.FromResult(CurrentChannelId);
+    /// <summary>
+    /// 파이프가 살아 있는지입니다. 객체가 남아 있는 것과 연결이 살아 있는 것은 다릅니다.
+    /// Discord를 다시 시작하면 객체는 그대로인데 파이프만 죽습니다.
+    /// </summary>
+    public bool PipeAlive { get; set; } = true;
+
+    public async Task<DiscordRpcConnection> EnsureConnectedAsync(CancellationToken cancellationToken)
+    {
+        // 실제 파이프는 상대가 죽어도 입출력을 해 보기 전까지 연결됐다고 답한다.
+        // 그래서 여기서 PipeAlive를 보지 않는다. 회복은 명령이 실패할 때 일어난다.
+        if (Connected)
+        {
+            return new DiscordRpcConnection(DiscordRpcStatus.Connected);
+        }
+        return await ConnectAsync(cancellationToken);
+    }
+
+    /// <summary>목록 조회가 돌려줄 값입니다.</summary>
+    public List<DiscordGuild> Guilds { get; } = [];
+    public Dictionary<string, List<DiscordVoiceChannel>> VoiceChannels { get; } = [];
+
+    public Task<IReadOnlyList<DiscordGuild>> GetGuildsAsync(CancellationToken cancellationToken) =>
+        Task.FromResult<IReadOnlyList<DiscordGuild>>(Guilds);
+
+    public Task<IReadOnlyList<DiscordVoiceChannel>> GetVoiceChannelsAsync(
+        string guildId,
+        CancellationToken cancellationToken) =>
+        Task.FromResult<IReadOnlyList<DiscordVoiceChannel>>(
+            VoiceChannels.TryGetValue(guildId, out var channels) ? channels : []);
+
+    public Task DisconnectAsync(CancellationToken cancellationToken)
+    {
+        Connected = false;
+        Disconnects++;
+        return Task.CompletedTask;
+    }
+
+    /// <summary>연결을 끊은 횟수입니다. 오류 후 재연결을 확인합니다.</summary>
+    public int Disconnects { get; private set; }
+
+    /// <summary>설정하면 조회가 예외를 던집니다(RPC 오류 재현용).</summary>
+    public Exception? ThrowOnGetSelected { get; set; }
+
+    public async Task<string?> GetSelectedVoiceChannelIdAsync(CancellationToken cancellationToken)
+    {
+        if (ThrowOnGetSelected is not null)
+        {
+            throw ThrowOnGetSelected;
+        }
+        if (!PipeAlive)
+        {
+            // 실제 클라이언트는 깨진 것을 확인하면 버리고 한 번 다시 연결해 이어 간다.
+            Connected = false;
+            await ConnectAsync(cancellationToken);
+        }
+        return CurrentChannelId;
+    }
 
     public Task SelectVoiceChannelAsync(string channelId, CancellationToken cancellationToken)
     {

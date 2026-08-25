@@ -12,6 +12,9 @@ public interface IProcessService
     Task<bool> IsRunningAsync(string processName, CancellationToken cancellationToken);
     Task StartAsync(string executablePath, CancellationToken cancellationToken);
     Task<bool> BringToFrontAsync(string processName, CancellationToken cancellationToken);
+
+    /// <summary>이름이 같은 프로세스를 닫습니다. 이미 없으면 아무 일도 하지 않습니다.</summary>
+    Task StopAsync(string processName, CancellationToken cancellationToken);
 }
 
 public interface IDiscordVoiceStatusClient
@@ -37,8 +40,28 @@ public sealed record DiscordRpcConnection(DiscordRpcStatus Status, string? Error
 public interface IDiscordVoiceChannelClient
 {
     Task<DiscordRpcConnection> ConnectAsync(CancellationToken cancellationToken);
+
+    /// <summary>
+    /// 이미 연결돼 있으면 그대로 씁니다. 끊긴 경우에만 다시 연결합니다. Discord는 연결을
+    /// 끊은 직후 한동안 새 연결을 거부하므로, 주기적인 조회가 매번 다시 연결하면 안 됩니다.
+    /// </summary>
+    Task<DiscordRpcConnection> EnsureConnectedAsync(CancellationToken cancellationToken);
+
+    /// <summary>연결만 끊습니다. 다음 요청에서 다시 연결할 수 있습니다.</summary>
+    Task DisconnectAsync(CancellationToken cancellationToken);
     Task<string?> GetSelectedVoiceChannelIdAsync(CancellationToken cancellationToken);
     Task SelectVoiceChannelAsync(string channelId, CancellationToken cancellationToken);
+
+    /// <summary>지금 로그인한 사용자가 가입한 서버입니다.</summary>
+    Task<IReadOnlyList<DiscordGuild>> GetGuildsAsync(CancellationToken cancellationToken);
+
+    /// <summary>
+    /// 그 서버에서 사용자에게 보이는 음성채널입니다. 볼 수 없는 채널은 애초에
+    /// 로컬 Discord가 모르므로 목록에 오르지 않습니다.
+    /// </summary>
+    Task<IReadOnlyList<DiscordVoiceChannel>> GetVoiceChannelsAsync(
+        string guildId,
+        CancellationToken cancellationToken);
 }
 
 public interface ISessionStore
