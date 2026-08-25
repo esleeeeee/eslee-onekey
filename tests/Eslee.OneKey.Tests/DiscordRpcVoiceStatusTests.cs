@@ -3,6 +3,22 @@ using Eslee.OneKey.Infrastructure.Windows;
 
 namespace Eslee.OneKey.Tests;
 
+/// <summary>프로세스 조회 자체가 실패하는 상황을 재현합니다.</summary>
+internal sealed class ThrowingProcessService(Exception failure) : IProcessService
+{
+    public Task<bool> IsRunningAsync(string processName, CancellationToken cancellationToken) =>
+        Task.FromException<bool>(failure);
+
+    public Task StartAsync(string executablePath, CancellationToken cancellationToken) =>
+        Task.CompletedTask;
+
+    public Task<bool> BringToFrontAsync(string processName, CancellationToken cancellationToken) =>
+        Task.FromResult(false);
+
+    public Task StopAsync(string processName, CancellationToken cancellationToken) =>
+        Task.CompletedTask;
+}
+
 /// <summary>
 /// 통화 중인지를 원격 서버가 아니라 로컬 Discord에 직접 묻습니다. 사용자 ID를
 /// 넘기지 않으므로 여러 사람이 써도 각자 자기 상태만 봅니다.
@@ -120,6 +136,63 @@ public sealed class DiscordRpcVoiceStatusTests
         // 5초마다 새로 연결하면 Discord가 한동안 새 연결을 거부한다.
         Assert.Equal(1, rpc.ConnectAttempts);
         Assert.Equal(0, rpc.Disconnects);
+    }
+
+    [Fact]
+    public async Task AFailedProcessLookupIsReportedInsteadOfThrowing()
+    {
+        var rpc = new FakeVoiceChannelClient();
+        var processes = new ThrowingProcessService(
+            new InvalidOperationException("프로세스 목록을 읽지 못했습니다."));
+        var status = new DiscordRpcVoiceStatusClient(() => rpc, processes, DiscordProcess);
+
+        var check = await status.CheckAsync(CancellationToken.None);
+
+        // 여기서 던지면 복원 폴링 태스크가 죽어 오디오가 영영 돌아오지 않는다.
+        Assert.Equal(DiscordVoiceState.Unavailable, check.State);
+        Assert.Contains("프로세스 목록", check.Error);
+    }
+
+    [Fact]
+    public async Task ADeadPipeIsRebuiltInsteadOfBeingTreatedAsConnected()
+    {
+        var (status, rpc, _) = Create();
+        await status.CheckAsync(CancellationToken.None);
+        Assert.Equal(1, rpc.ConnectAttempts);
+
+        // Discord를 다시 시작하면 객체는 남아 있어도 파이프는 죽어 있다.
+        rpc.PipeAlive = false;
+        var check = await status.CheckAsync(CancellationToken.None);
+
+        Assert.Equal(DiscordVoiceState.NotInVoice, check.State);
+        Assert.Equal(2, rpc.ConnectAttempts);
+    }
+
+    [Fact]
+    public async Task AutoJoinRecoversAfterDiscordRestarts()
+    {
+        var (_, rpc, _) = Create();
+        var join = new VoiceChannelAutoJoin(rpc, new FakeLogger());
+        var settings = new AutomationSettings
+        {
+            UseDiscordIntegration = true,
+            AutoJoinVoiceChannel = true,
+            VoiceChannelTarget = "222222222222222222",
+            DiscordRpcClientId = "123456789012345678",
+        };
+        await join.EnsureJoinedAsync(settings, CancellationToken.None);
+        Assert.Equal(1, rpc.ConnectAttempts);
+
+        // Discord를 다시 시작하면 파이프가 죽고 통화에서도 빠져 있다.
+        // 죽은 파이프를 그대로 쓰면 자동 입장이 앱을 다시 켤 때까지 살아나지 못한다.
+        rpc.PipeAlive = false;
+        rpc.CurrentChannelId = null;
+        rpc.SelectedChannels.Clear();
+        var result = await join.EnsureJoinedAsync(settings, CancellationToken.None);
+
+        Assert.Equal(2, rpc.ConnectAttempts);
+        Assert.Equal(VoiceJoinOutcome.Joined, result.Outcome);
+        Assert.Equal(["222222222222222222"], rpc.SelectedChannels);
     }
 
     [Fact]

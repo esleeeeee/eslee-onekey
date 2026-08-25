@@ -16,13 +16,16 @@ public sealed class DiscordRpcVoiceChannelClient(
 {
     private DiscordRpcPipe? _pipe;
 
-    /// <summary>지금 파이프가 살아 있는지 여부입니다.</summary>
-    public bool IsConnected => _pipe is not null;
+    /// <summary>
+    /// 지금 파이프가 실제로 살아 있는지 여부입니다. 객체가 남아 있는 것과 연결이
+    /// 살아 있는 것은 다릅니다. Discord를 다시 시작하면 파이프만 죽어 있습니다.
+    /// </summary>
+    public bool IsConnected => _pipe is { IsConnected: true };
 
     public async Task<DiscordRpcConnection> EnsureConnectedAsync(CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
-        return _pipe is not null
+        return IsConnected
             ? new DiscordRpcConnection(DiscordRpcStatus.Connected)
             : await ConnectAsync(cancellationToken);
     }

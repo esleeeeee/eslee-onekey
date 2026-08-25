@@ -329,12 +329,19 @@ internal sealed class FakeVoiceChannelClient : IDiscordVoiceChannelClient
         }
         var connection = _connectionResults.Count > 0 ? _connectionResults.Dequeue() : Connection;
         Connected = connection.Status == DiscordRpcStatus.Connected;
+        PipeAlive = true;
         return connection;
     }
 
+    /// <summary>
+    /// 파이프가 살아 있는지입니다. 객체가 남아 있는 것과 연결이 살아 있는 것은 다릅니다.
+    /// Discord를 다시 시작하면 객체는 그대로인데 파이프만 죽습니다.
+    /// </summary>
+    public bool PipeAlive { get; set; } = true;
+
     public async Task<DiscordRpcConnection> EnsureConnectedAsync(CancellationToken cancellationToken)
     {
-        if (Connected)
+        if (Connected && PipeAlive)
         {
             return new DiscordRpcConnection(DiscordRpcStatus.Connected);
         }
@@ -354,10 +361,16 @@ internal sealed class FakeVoiceChannelClient : IDiscordVoiceChannelClient
     /// <summary>설정하면 조회가 예외를 던집니다(RPC 오류 재현용).</summary>
     public Exception? ThrowOnGetSelected { get; set; }
 
-    public Task<string?> GetSelectedVoiceChannelIdAsync(CancellationToken cancellationToken) =>
-        ThrowOnGetSelected is null
+    public Task<string?> GetSelectedVoiceChannelIdAsync(CancellationToken cancellationToken)
+    {
+        if (ThrowOnGetSelected is not null)
+        {
+            return Task.FromException<string?>(ThrowOnGetSelected);
+        }
+        return PipeAlive
             ? Task.FromResult(CurrentChannelId)
-            : Task.FromException<string?>(ThrowOnGetSelected);
+            : Task.FromException<string?>(new IOException("파이프가 끊겼습니다."));
+    }
 
     public Task SelectVoiceChannelAsync(string channelId, CancellationToken cancellationToken)
     {

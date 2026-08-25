@@ -18,25 +18,27 @@ public sealed class DiscordRpcVoiceStatusClient(
 {
     public async Task<DiscordVoiceCheck> CheckAsync(CancellationToken cancellationToken)
     {
-        // Discord가 없으면 통화 중일 수 없다. 여기서 Unavailable을 돌려주면 복원이
-        // 영원히 보류된다. 복원 대기에는 시한이 없고 사용자가 직접 눌러야만 끝난다.
-        if (string.IsNullOrWhiteSpace(discordProcessName) ||
-            !await processes.IsRunningAsync(discordProcessName, cancellationToken))
-        {
-            return new DiscordVoiceCheck(DiscordVoiceState.NotInVoice);
-        }
-
-        var client = clientProvider();
-        if (client is null)
-        {
-            return new DiscordVoiceCheck(
-                DiscordVoiceState.Unauthorized,
-                "Discord 연결이 설정되지 않아 통화 상태를 확인할 수 없습니다. " +
-                "설정에서 Discord 연결을 먼저 수행하세요.");
-        }
-
+        IDiscordVoiceChannelClient? client = null;
         try
         {
+            // Discord가 없으면 통화 중일 수 없다. 여기서 Unavailable을 돌려주면 복원이
+            // 영원히 보류된다. 복원 대기에는 시한이 없고 사용자가 직접 눌러야만 끝난다.
+            // 프로세스 조회 자체도 실패할 수 있어 try 안에서 부른다.
+            if (string.IsNullOrWhiteSpace(discordProcessName) ||
+                !await processes.IsRunningAsync(discordProcessName, cancellationToken))
+            {
+                return new DiscordVoiceCheck(DiscordVoiceState.NotInVoice);
+            }
+
+            client = clientProvider();
+            if (client is null)
+            {
+                return new DiscordVoiceCheck(
+                    DiscordVoiceState.Unauthorized,
+                    "Discord 연결이 설정되지 않아 통화 상태를 확인할 수 없습니다. " +
+                    "설정에서 Discord 연결을 먼저 수행하세요.");
+            }
+
             var connection = await client.EnsureConnectedAsync(cancellationToken);
             if (connection.Status != DiscordRpcStatus.Connected)
             {
@@ -57,7 +59,10 @@ public sealed class DiscordRpcVoiceStatusClient(
         {
             // 예외가 그대로 새면 복원 폴링 태스크가 죽어 자동 복원이 영영 멈춘다.
             // 끊어 두면 다음 확인에서 다시 연결한다.
-            await SafeDisconnectAsync(client, cancellationToken);
+            if (client is not null)
+            {
+                await SafeDisconnectAsync(client, cancellationToken);
+            }
             return new DiscordVoiceCheck(DiscordVoiceState.Unavailable, exception.Message);
         }
     }
