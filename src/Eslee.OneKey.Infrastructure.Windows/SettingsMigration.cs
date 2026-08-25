@@ -15,7 +15,7 @@ namespace Eslee.OneKey.Infrastructure.Windows;
 /// </summary>
 public static class SettingsMigration
 {
-    public const int CurrentSchemaVersion = 5;
+    public const int CurrentSchemaVersion = 6;
 
     public static JsonNode Migrate(JsonNode? root)
     {
@@ -51,8 +51,45 @@ public static class SettingsMigration
         {
             MigrateToV5(settings);
         }
+        if (version < 6)
+        {
+            MigrateToV6(settings);
+        }
         settings["schemaVersion"] = CurrentSchemaVersion;
         return settings;
+    }
+
+    /// <summary>
+    /// v5까지는 Discord 연결 값이 자동화마다 따로 있었습니다. 자동화를 바꿀 때마다
+    /// 다른 값이 보여서, 앱 전체에 하나만 두도록 끌어올립니다. 자동화 쪽 값은 지우지
+    /// 않습니다. 실행할 때 전역 값을 각 자동화에 얹어 쓰므로 그대로 두어도 무해하고,
+    /// 예전 버전으로 되돌아가도 설정이 남아 있습니다.
+    /// </summary>
+    private static void MigrateToV6(JsonObject settings)
+    {
+        var automations = (settings["automations"] as JsonArray)?.OfType<JsonObject>().ToList() ?? [];
+        foreach (var name in new[]
+        {
+            "discordRpcClientId",
+            "discordApiBaseUrl",
+            "discordExecutablePath",
+            "discordProcessName",
+        })
+        {
+            if (settings[name] is not null)
+            {
+                continue;
+            }
+
+            // 여러 자동화가 있으면 값이 들어 있는 첫 자동화를 기준으로 삼습니다.
+            var value = automations
+                .Select(automation => (string?)automation[name])
+                .FirstOrDefault(candidate => !string.IsNullOrWhiteSpace(candidate));
+            if (value is not null)
+            {
+                settings[name] = value;
+            }
+        }
     }
 
     /// <summary>

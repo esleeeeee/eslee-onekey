@@ -344,15 +344,13 @@ public partial class MainWindow : Window
     /// </summary>
     private DiscordRpcVoiceChannelClient? EnsureRpcVoiceClient(AutomationSettings rule)
     {
-        if (!rule.UseDiscordIntegration ||
-            string.IsNullOrWhiteSpace(rule.DiscordRpcClientId) ||
-            _logger is null)
+        if (!rule.UseDiscordIntegration || _logger is null)
         {
             return null;
         }
 
         _rpcVoiceClient ??= new DiscordRpcVoiceChannelClient(
-            rule.DiscordRpcClientId,
+            AppDefaults.ResolveRpcClientId(_appSettings.DiscordRpcClientId),
             async cancellationToken => (await GetUsableRpcTokensAsync(cancellationToken))?.AccessToken,
             TimeSpan.FromSeconds(20));
         return _rpcVoiceClient;
@@ -395,7 +393,7 @@ public partial class MainWindow : Window
         {
             using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
             var refreshed = await new DiscordRpcAuthorizer(client).RefreshAsync(
-                _automation.DiscordRpcClientId,
+                AppDefaults.ResolveRpcClientId(_appSettings.DiscordRpcClientId),
                 tokens,
                 cancellationToken);
             if (refreshed is null)
@@ -440,7 +438,7 @@ public partial class MainWindow : Window
             var storedSecret = (await LoadRpcTokensAsync(CancellationToken.None))?.ClientSecret;
             using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(15) };
             var (result, tokens) = await new DiscordRpcAuthorizer(client).AuthorizeAsync(
-                AppDefaults.ResolveRpcClientId(RpcClientIdText.Text),
+                AppDefaults.ResolveRpcClientId(_appSettings.DiscordRpcClientId),
                 storedSecret,
                 CancellationToken.None);
 
@@ -474,7 +472,7 @@ public partial class MainWindow : Window
     private void ApplySettingsToControls()
     {
         RefreshRuleList(_rules.IndexOf(_automation) is var found && found >= 0 ? found : 0);
-        StartupCheck.IsChecked = _appSettings.StartWithWindows || _startup.IsEnabled();
+        LoadGlobalSettingsIntoControls();
     }
 
     /// <summary>왼쪽 목록을 다시 그리고 지정한 자동화를 오른쪽에 올립니다.</summary>
@@ -587,10 +585,6 @@ public partial class MainWindow : Window
 
         UseDiscordCheck.IsChecked = rule.UseDiscordIntegration;
         AutoJoinVoiceCheck.IsChecked = rule.AutoJoinVoiceChannel;
-        DiscordPathText.Text = rule.DiscordExecutablePath;
-        DiscordProcessText.Text = rule.DiscordProcessName;
-        ApiUrlText.Text = rule.DiscordApiBaseUrl;
-        RpcClientIdText.Text = rule.DiscordRpcClientId;
         VoiceChannelTargetText.Text = rule.VoiceChannelTarget;
         ShowSavedDiscordSelection(rule);
 
@@ -736,17 +730,17 @@ public partial class MainWindow : Window
             ? WindowsProcessService.NormalizeProcessName(WatchProcessText.Text)
             : string.Empty,
         UseDiscordIntegration = UseDiscordCheck.IsChecked == true,
-        DiscordExecutablePath = DiscordPathText.Text.Trim(),
-        DiscordProcessName = WindowsProcessService.NormalizeProcessName(DiscordProcessText.Text),
+        DiscordExecutablePath = _appSettings.DiscordExecutablePath,
+        DiscordProcessName = _appSettings.DiscordProcessName,
         TargetAudioEndpointId = UseAudioCheck.IsChecked == true
             ? AudioEndpointCombo.SelectedValue as string ?? string.Empty
             : string.Empty,
-        DiscordApiBaseUrl = ApiUrlText.Text.Trim(),
+        DiscordApiBaseUrl = _appSettings.DiscordApiBaseUrl,
         AutoJoinVoiceChannel = AutoJoinVoiceCheck.IsChecked == true,
         VoiceChannelTarget = VoiceChannelCombo.SelectedValue as string
             ?? VoiceChannelTargetText.Text.Trim(),
         VoiceChannelGuildId = GuildCombo.SelectedValue as string ?? _automation.VoiceChannelGuildId,
-        DiscordRpcClientId = RpcClientIdText.Text.Trim(),
+        DiscordRpcClientId = _appSettings.DiscordRpcClientId,
         RestoreAudioOnExit = RestoreDeviceRadio.IsChecked == true,
         DeferRestoreWhileDiscordInVoice = DeferRestoreCheck.IsChecked == true,
         ProcessPollInterval = TimeSpan.FromSeconds(1),
@@ -1028,7 +1022,7 @@ public partial class MainWindow : Window
                 using var http = new HttpClient { Timeout = TimeSpan.FromSeconds(10) };
                 var intersection = await new DiscordGuildIntersectionClient(
                         http,
-                        _automation.DiscordApiBaseUrl,
+                        _appSettings.DiscordApiBaseUrl,
                         token)
                     .IntersectAsync([.. local.Select(guild => guild.Id)], CancellationToken.None);
 
@@ -1115,6 +1109,7 @@ public partial class MainWindow : Window
         try
         {
             CommitEditingRule();
+            ApplyGlobalsToRules();
             var existingToken = await _secretStore.LoadDiscordApiTokenAsync(CancellationToken.None);
             var suppliedToken = ApiTokenPassword.Password;
             foreach (var rule in _rules)
@@ -1165,6 +1160,38 @@ public partial class MainWindow : Window
         }
     }
 
+    /// <summary>앱 설정 칸을 채웁니다. 어느 자동화를 보고 있든 값이 같습니다.</summary>
+    private void LoadGlobalSettingsIntoControls()
+    {
+        StartupCheck.IsChecked = _appSettings.StartWithWindows || _startup.IsEnabled();
+        RpcClientIdText.Text = _appSettings.DiscordRpcClientId;
+        ApiUrlText.Text = _appSettings.DiscordApiBaseUrl;
+        DiscordPathText.Text = _appSettings.DiscordExecutablePath;
+        DiscordProcessText.Text = _appSettings.DiscordProcessName;
+    }
+
+    /// <summary>
+    /// 전역 Discord 값을 모든 자동화에 얹습니다. 엔진은 규칙 단위로만 설정을 읽으므로,
+    /// 저장 직전에 한 번 맞춰 두면 엔진을 고치지 않고도 값이 하나로 유지됩니다.
+    /// </summary>
+    private void ApplyGlobalsToRules()
+    {
+        for (var index = 0; index < _rules.Count; index++)
+        {
+            _rules[index] = _rules[index] with
+            {
+                DiscordRpcClientId = _appSettings.DiscordRpcClientId,
+                DiscordApiBaseUrl = _appSettings.DiscordApiBaseUrl,
+                DiscordExecutablePath = _appSettings.DiscordExecutablePath,
+                DiscordProcessName = _appSettings.DiscordProcessName,
+            };
+        }
+        if (_editingRule >= 0 && _editingRule < _rules.Count)
+        {
+            _automation = _rules[_editingRule];
+        }
+    }
+
     private async void SaveAppSettings_Click(object sender, RoutedEventArgs e)
     {
         if (_initializationFailed || _settingsStore is null)
@@ -1174,12 +1201,32 @@ public partial class MainWindow : Window
 
         try
         {
-            _appSettings = _appSettings with { StartWithWindows = StartupCheck.IsChecked == true };
+            var suppliedToken = ApiTokenPassword.Password;
+            if (!string.IsNullOrWhiteSpace(suppliedToken) && _secretStore is not null)
+            {
+                await _secretStore.SaveDiscordApiTokenAsync(suppliedToken, CancellationToken.None);
+                ApiTokenPassword.Clear();
+            }
+
+            _appSettings = _appSettings with
+            {
+                SchemaVersion = SettingsMigration.CurrentSchemaVersion,
+                StartWithWindows = StartupCheck.IsChecked == true,
+                DiscordRpcClientId = RpcClientIdText.Text.Trim(),
+                DiscordApiBaseUrl = ApiUrlText.Text.Trim(),
+                DiscordExecutablePath = DiscordPathText.Text.Trim(),
+                DiscordProcessName = WindowsProcessService.NormalizeProcessName(DiscordProcessText.Text),
+            };
+            // 엔진은 규칙 단위로만 설정을 읽으므로 전역 값을 규칙에 얹어 저장한다.
+            ApplyGlobalsToRules();
+            _appSettings = _appSettings with { Automations = [.. _rules] };
             await _settingsStore.SaveAsync(_appSettings, CancellationToken.None);
             _startup.SetEnabled(
                 _appSettings.StartWithWindows,
                 Environment.ProcessPath ?? throw new InvalidOperationException("현재 실행 경로를 찾을 수 없습니다."));
             _logger?.Info("app-settings-saved", "앱 설정을 저장했습니다.");
+            await StartRuntimeAsync();
+            UpdateStatus();
             MessageBox.Show("앱 설정을 저장했습니다.", "eslee OneKey");
         }
         catch (Exception exception)
@@ -1226,23 +1273,8 @@ public partial class MainWindow : Window
                 throw new InvalidOperationException(
                     "음성채널 링크 또는 Channel ID를 올바르게 입력하세요.");
             }
-            if (string.IsNullOrWhiteSpace(settings.DiscordRpcClientId))
-            {
-                throw new InvalidOperationException("RPC Client ID를 입력하세요.");
-            }
         }
 
-        // 복원 보류는 이제 로컬 Discord에 직접 묻는다. 그래서 API URL이나 Token이 아니라
-        // RPC Client ID가 있어야 한다. 없으면 매번 확인에 실패해 오디오가 되돌아오지
-        // 않는다. 복원 대기에는 시한이 없기 때문이다.
-        if (settings.UseDiscordIntegration &&
-            settings.RestoreAudioOnExit &&
-            settings.DeferRestoreWhileDiscordInVoice &&
-            string.IsNullOrWhiteSpace(settings.DiscordRpcClientId))
-        {
-            throw new InvalidOperationException(
-                "통화 중 복원 보류를 쓰려면 RPC Client ID를 입력하고 Discord 연결을 수행하세요.");
-        }
     }
 
     private async void StartNow_Click(object sender, RoutedEventArgs e)
@@ -1333,7 +1365,7 @@ public partial class MainWindow : Window
         }
 
         using var client = new HttpClient { Timeout = TimeSpan.FromSeconds(5) };
-        var result = await new DiscordVoiceStatusClient(client, ApiUrlText.Text.Trim(), token)
+        var result = await new DiscordVoiceStatusClient(client, _appSettings.DiscordApiBaseUrl, token)
             .CheckAsync(CancellationToken.None);
         MessageBox.Show(
             result.State switch

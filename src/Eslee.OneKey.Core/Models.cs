@@ -108,8 +108,18 @@ public sealed record AutomationSettings
 
 public sealed record AppSettings
 {
-    public int SchemaVersion { get; init; } = 5;
+    public int SchemaVersion { get; init; } = 6;
     public bool StartWithWindows { get; init; }
+
+    /// <summary>
+    /// Discord 연결에 쓰는 값들입니다. 자동화마다 다를 이유가 없어 앱 전체에서
+    /// 하나만 둡니다. 어느 자동화를 보고 있든 같은 값이어야 합니다.
+    /// API Token은 여기 두지 않고 DPAPI에만 보관합니다.
+    /// </summary>
+    public string DiscordRpcClientId { get; init; } = string.Empty;
+    public string DiscordApiBaseUrl { get; init; } = string.Empty;
+    public string DiscordExecutablePath { get; init; } = string.Empty;
+    public string DiscordProcessName { get; init; } = "Discord";
     public List<AutomationSettings> Automations { get; init; } = [new()];
 
     /// <summary>
