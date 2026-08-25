@@ -214,15 +214,14 @@
 
                         <Border Background="#FFF6E5" CornerRadius="8" Padding="14" Margin="0,10,0,14">
                             <StackPanel>
-                                <TextBlock Text="최초 등록 순서" FontWeight="SemiBold" Margin="0,0,0,6" />
+                                <TextBlock Text="계정 등록 순서" FontWeight="SemiBold" Margin="0,0,0,6" />
                                 <TextBlock TextWrapping="Wrap" Text="1. 원하는 계정으로 런처에 직접 로그인합니다 (로그인 상태 유지 켜기)." />
-                                <TextBlock TextWrapping="Wrap" Text="2. 아래에서 그 프로필의 [현재 세션 저장]을 누릅니다." />
-                                <TextBlock TextWrapping="Wrap" Text="3. 런처를 종료합니다." />
-                                <TextBlock TextWrapping="Wrap" Text="4. [다음 계정 로그인 준비]를 누릅니다. 런처의 로그아웃 버튼은 절대 쓰지 마세요." />
-                                <TextBlock TextWrapping="Wrap" Text="5. 런처를 실행해 다음 계정으로 직접 로그인합니다." />
-                                <TextBlock TextWrapping="Wrap" Text="6. 그 프로필의 [현재 세션 저장]을 누릅니다." />
+                                <TextBlock TextWrapping="Wrap" Text="2. 그 프로필에서 [현재 로그인 계정 등록]을 누릅니다." />
+                                <TextBlock TextWrapping="Wrap" Text="3. [다른 계정 로그인 화면 열기]를 누릅니다. 런처가 닫혔다가 로그인 화면으로 다시 열립니다." />
+                                <TextBlock TextWrapping="Wrap" Text="4. 다음 계정으로 직접 로그인합니다." />
+                                <TextBlock TextWrapping="Wrap" Text="5. 그 프로필에서 [현재 로그인 계정 등록]을 누릅니다." />
                                 <TextBlock TextWrapping="Wrap" Foreground="#A12828" Margin="0,6,0,0"
-                                           Text="런처에서 로그아웃하면 서버가 저장해 둔 세션을 폐기해 이미 등록한 계정까지 다시 등록해야 합니다." />
+                                           Text="런처의 로그아웃 버튼은 쓰지 마세요. 이미 등록해 둔 계정의 저장 세션까지 무효가 됩니다." />
                             </StackPanel>
                         </Border>
 
@@ -260,10 +259,12 @@
                                                 <TextBlock Text="게임 프로세스" VerticalAlignment="Center" Width="100" Margin="18,0,0,0" />
                                                 <TextBox Width="200" Text="{Binding BlockingProcesses, UpdateSourceTrigger=PropertyChanged}" />
                                             </StackPanel>
-                                            <WrapPanel Margin="0,8,0,0">
-                                                <Button Content="현재 세션 저장" Click="CaptureAccountSession_Click" Tag="{Binding}"
+                                            <TextBlock Foreground="#69677A" FontSize="11" Margin="0,10,0,0"
+                                                       Text="아래 버튼은 누르는 즉시 실행됩니다. 위의 이름과 단축키는 [계정 설정 저장]으로 저장하세요." />
+                                            <WrapPanel Margin="0,4,0,0">
+                                                <Button Content="이 계정으로 전환" Click="SwitchToAccount_Click" Tag="{Binding}"
                                                         Background="#6D5DFB" Foreground="White" />
-                                                <Button Content="세션 다시 등록" Click="ReenrollAccountSession_Click" Tag="{Binding}" />
+                                                <Button Content="현재 로그인 계정 등록" Click="CaptureAccountSession_Click" Tag="{Binding}" />
                                                 <Button Content="프로필 삭제" Click="DeleteAccountProfile_Click" Tag="{Binding}" />
                                             </WrapPanel>
                                         </StackPanel>
@@ -272,9 +273,11 @@
                             </ItemsControl.ItemTemplate>
                         </ItemsControl>
 
+                        <TextBlock TextWrapping="Wrap" Foreground="#69677A" Margin="0,4,0,4"
+                                   Text="이름, 단축키, 세션 파일 경로 같은 설정은 [계정 설정 저장]을 눌러야 저장됩니다. [현재 로그인 계정 등록]은 지금 로그인된 계정만 프로필에 담습니다." />
                         <WrapPanel Margin="0,4,0,0">
                             <Button Content="프로필 추가" Click="AddAccountProfile_Click" />
-                            <Button Content="다음 계정 로그인 준비" Click="PrepareNewSignIn_Click" />
+                            <Button Content="다른 계정 로그인 화면 열기" Click="OpenOtherAccountSignIn_Click" />
                             <Button Content="상태 새로고침" Click="RefreshAccountStatus_Click" />
                             <Button Content="계정 설정 저장" Click="SaveAccountProfiles_Click"
                                     Background="#6D5DFB" Foreground="White" />
