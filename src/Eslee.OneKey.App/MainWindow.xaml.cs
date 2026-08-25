@@ -35,10 +35,6 @@ public partial class MainWindow : Window
     /// <summary>늦게 도착한 조회 결과가 새 선택을 덮지 않도록 세는 번호입니다.</summary>
     private int _discordLoadGeneration;
 
-    /// <summary>지금 열려 있는 도움말입니다. 같은 물음표를 다시 누르면 닫습니다.</summary>
-    private FrameworkElement? _openHint;
-    private DateTimeOffset _hintOpenedAt;
-    private readonly SystemClock _clock = new();
 
     /// <summary>봇도 함께 들어가 있는 서버만 담습니다. 앱이 도는 동안 재사용합니다.</summary>
     private readonly List<DiscordGuild> _guilds = [];
@@ -717,81 +713,6 @@ public partial class MainWindow : Window
     }
 
     private static Visibility Visible(bool shown) => shown ? Visibility.Visible : Visibility.Collapsed;
-
-    /// <summary>
-    /// 물음표를 누르면 기다리지 않고 바로 엽니다. 같은 것을 다시 누르면 닫습니다.
-    /// 다른 곳을 누르면 설명 스스로 닫힙니다.
-    /// </summary>
-    private void Hint_Click(object sender, System.Windows.Input.MouseButtonEventArgs e)
-    {
-        if (sender is not FrameworkElement element)
-        {
-            return;
-        }
-
-        e.Handled = true;
-        element.Focus();
-        var tip = EnsureToolTip(element);
-
-        // 설명은 바깥 클릭에 스스로 닫히므로, 방금 닫힌 것을 다시 여는 일이 없도록
-        // 잠깐 사이에 같은 물음표를 또 누른 경우는 닫힌 상태로 둡니다.
-        var reclickedJustNow = ReferenceEquals(_openHint, element) &&
-            _clock.UtcNow - _hintOpenedAt < TimeSpan.FromMilliseconds(500);
-        if (reclickedJustNow)
-        {
-            tip.IsOpen = false;
-            _openHint = null;
-            return;
-        }
-
-        ShowHint(element, tip);
-    }
-
-    private void ShowHint(FrameworkElement element, System.Windows.Controls.ToolTip tip)
-    {
-        tip.PlacementTarget = element;
-        tip.Placement = System.Windows.Controls.Primitives.PlacementMode.Bottom;
-        // 바깥을 누르면 스스로 닫히게 둡니다.
-        tip.StaysOpen = false;
-        tip.IsOpen = true;
-        _openHint = element;
-        _hintOpenedAt = _clock.UtcNow;
-    }
-
-    /// <summary>
-    /// WPF는 키보드 포커스만으로는 설명을 띄우지 않습니다. 마우스를 쓰지 않는 사람도
-    /// 읽을 수 있도록 직접 엽니다.
-    /// </summary>
-    private void Hint_GotKeyboardFocus(object sender, System.Windows.Input.KeyboardFocusChangedEventArgs e)
-    {
-        if (sender is FrameworkElement element)
-        {
-            ShowHint(element, EnsureToolTip(element));
-        }
-    }
-
-    private void Hint_LostKeyboardFocus(object sender, System.Windows.Input.KeyboardFocusChangedEventArgs e)
-    {
-        if (sender is FrameworkElement { ToolTip: System.Windows.Controls.ToolTip tip } element)
-        {
-            tip.IsOpen = false;
-            if (ReferenceEquals(_openHint, element))
-            {
-                _openHint = null;
-            }
-        }
-    }
-
-    private static System.Windows.Controls.ToolTip EnsureToolTip(FrameworkElement element)
-    {
-        if (element.ToolTip is System.Windows.Controls.ToolTip existing)
-        {
-            return existing;
-        }
-        var created = new System.Windows.Controls.ToolTip { Content = element.ToolTip };
-        element.ToolTip = created;
-        return created;
-    }
 
     private void FeatureToggle_Changed(object sender, RoutedEventArgs e)
     {
