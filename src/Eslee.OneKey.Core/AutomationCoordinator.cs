@@ -112,6 +112,22 @@ public sealed class AutomationCoordinator : IAsyncDisposable
         }
     }
 
+    /// <summary>
+    /// 단축키 대신 화면의 버튼으로 규칙을 실행합니다. 단축키를 누른 것과 같은 경로를
+    /// 타므로 결과도 같습니다. 꺼 둔 규칙이나 모르는 규칙이면 false입니다.
+    /// </summary>
+    public async Task<bool> TriggerRuleAsync(Guid ruleId)
+    {
+        var binding = _rules.FirstOrDefault(rule => rule.Rule.Id == ruleId && rule.Rule.Enabled);
+        if (binding is null)
+        {
+            return false;
+        }
+
+        await HandleRuleHotkeyAsync(binding);
+        return true;
+    }
+
     /// <summary>감시 대상이 바뀐 경우에만 프로세스 감시를 다시 건다.</summary>
     private async Task WatchAsync(AutomationSettings rule, CancellationToken cancellationToken)
     {

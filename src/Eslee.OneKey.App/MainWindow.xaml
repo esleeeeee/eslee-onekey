@@ -203,6 +203,12 @@
                                         <Button Content="찾기" Click="BrowseLaunch_Click" />
                                     </StackPanel>
                                     <StackPanel Style="{StaticResource Row}">
+                                        <TextBlock Text="실행 인자" Style="{StaticResource FieldLabel}" />
+                                        <TextBox x:Name="LaunchArgumentsText" Width="360" />
+                                        <ContentControl Style="{StaticResource Hint}"
+                                                   ToolTip="실행 파일에 넘길 인자입니다. 런처만 뜨지 않고 게임까지 바로 켜려면 런처가 받는 게임 실행 인자를 여기에 넣습니다. 비워 두면 인자 없이 실행합니다." />
+                                    </StackPanel>
+                                    <StackPanel Style="{StaticResource Row}">
                                         <TextBlock Text="종료 감시 프로그램" Style="{StaticResource FieldLabel}" />
                                         <TextBox x:Name="WatchProcessText" Width="280" />
                                         <ContentControl Style="{StaticResource Hint}"
@@ -235,6 +241,11 @@
                                     </WrapPanel>
                                     <TextBlock Foreground="#A12828" TextWrapping="Wrap" Margin="140,0,0,8"
                                                Text="게임 런처에서 직접 로그아웃하면 저장해 둔 로그인 세션이 무효가 될 수 있습니다." />
+                                    <StackPanel Orientation="Horizontal" Margin="140,0,0,8">
+                                        <CheckBox x:Name="CloseGameToSwitchCheck" Content="게임이 켜져 있어도 종료하고 전환" />
+                                        <ContentControl Style="{StaticResource Hint}"
+                                                   ToolTip="다른 계정으로 게임이 실행 중일 때 단축키를 누르면 게임과 런처를 종료하고 이 계정으로 다시 켭니다. 꺼 두면 게임을 직접 종료해야 전환됩니다." />
+                                    </StackPanel>
                                     <Expander Header="고급 (세션 파일과 프로세스 이름)" Margin="140,0,0,0" Foreground="#69677A">
                                         <StackPanel Margin="0,8,0,0">
                                             <StackPanel Style="{StaticResource Row}">
@@ -349,6 +360,16 @@
                         <StackPanel Style="{StaticResource Row}">
                             <TextBlock Text="Windows 시작" Style="{StaticResource FieldLabel}" />
                             <CheckBox x:Name="StartupCheck" Content="로그인 시 자동 실행" VerticalAlignment="Center" />
+                        </StackPanel>
+                        <StackPanel Style="{StaticResource Row}">
+                            <TextBlock Text="바탕화면 버튼" Style="{StaticResource FieldLabel}" />
+                            <CheckBox x:Name="QuickButtonsCheck" Content="자동화 버튼 창 표시" VerticalAlignment="Center" />
+                            <ContentControl Style="{StaticResource Hint}"
+                                       ToolTip="켜 둔 자동화마다 버튼이 하나씩 있는 작은 창을 띄웁니다. 버튼을 누르면 단축키를 누른 것과 같습니다. 창은 끌어서 옮길 수 있고, 우클릭으로 숨기거나 항상 위에 둘 수 있습니다." />
+                        </StackPanel>
+                        <StackPanel Style="{StaticResource Row}">
+                            <TextBlock Text="" Style="{StaticResource FieldLabel}" />
+                            <CheckBox x:Name="QuickButtonsTopmostCheck" Content="버튼 창을 항상 위에 표시" VerticalAlignment="Center" />
                         </StackPanel>
                         <WrapPanel Margin="140,6,0,20">
                             <Button Content="앱 설정 저장" Click="SaveAppSettings_Click" Background="#6D5DFB" Foreground="White" />

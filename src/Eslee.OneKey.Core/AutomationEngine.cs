@@ -23,6 +23,16 @@ public sealed class AutomationEngine : IAsyncDisposable
     private VoiceChannelAutoJoin? _voiceChannelAutoJoin;
     private readonly IGameSessionService? _accountSessions;
     private DateTimeOffset? _launcherRestartedAt;
+
+    /// <summary>실행 명령을 보낸 직후 같은 명령을 다시 보내지 않는 시간입니다.</summary>
+    private static readonly TimeSpan RelaunchGuard = TimeSpan.FromSeconds(20);
+    private DateTimeOffset? _lastLaunchAt;
+
+    /// <summary>직전 계정 전환 요청이 "이미 그 계정"으로 끝났는지 여부입니다.</summary>
+    private bool _alreadyOnRequestedAccount;
+
+    /// <summary>이번 실행에서 대상 장치가 없어 오디오 전환을 건너뛰었는지 여부입니다.</summary>
+    private bool _audioSkippedThisRun;
     // Shared across runtime replacement and UI maintenance, even while no engine exists.
     private static readonly SemaphoreSlim _gate = new(1, 1);
 
@@ -155,7 +165,12 @@ public sealed class AutomationEngine : IAsyncDisposable
                 if (accountProfile is not null && SharesExecutionEnvironment(_settings, rule))
                 {
                     _settings = rule;
-                    return await SwitchAccountCoreAsync(accountProfile, cancellationToken);
+                    var switched = await SwitchAccountCoreAsync(accountProfile, cancellationToken);
+                    if (_alreadyOnRequestedAccount)
+                    {
+                        await FocusOrLaunchAsync(cancellationToken);
+                    }
+                    return switched;
                 }
 
                 const string reason = "동일 자동화가 이미 실행 중이어서 중복 트리거를 무시했습니다.";
@@ -253,11 +268,13 @@ public sealed class AutomationEngine : IAsyncDisposable
             return AutomationStartResult.Ignored("계정 전환 기능을 쓸 수 없습니다.");
         }
 
+        _alreadyOnRequestedAccount = false;
         try
         {
             var result = await ActivateAccountAsync(profile, cancellationToken);
             if (result.Outcome == GameSessionOutcome.AlreadyActive)
             {
+                _alreadyOnRequestedAccount = true;
                 const string reason = "이미 이 계정이라 런처를 다시 시작하지 않았습니다.";
                 _logger.Info("account-already-active", reason);
                 return AutomationStartResult.Ignored(reason);
@@ -301,6 +318,40 @@ public sealed class AutomationEngine : IAsyncDisposable
         return AutomationStartResult.Ignored(message);
     }
 
+    /// <summary>
+    /// 이미 그 계정인데 단축키를 다시 누른 경우입니다. 게임이 떠 있으면 앞으로 가져오고,
+    /// 런처만 남아 있으면 게임을 시작합니다. 어느 상태에서 눌러도 게임까지 가야 합니다.
+    /// </summary>
+    private async Task FocusOrLaunchAsync(CancellationToken cancellationToken)
+    {
+        if (string.IsNullOrWhiteSpace(_settings.WatchProcessName))
+        {
+            return;
+        }
+
+        try
+        {
+            if (await _processes.IsRunningAsync(_settings.WatchProcessName, cancellationToken))
+            {
+                await _processes.BringToFrontAsync(_settings.WatchProcessName, cancellationToken);
+                return;
+            }
+
+            // 게임이 뜨는 데는 시간이 걸린다. 그 사이 또 눌렀다고 실행 명령을 거듭 보내지 않는다.
+            if (_lastLaunchAt is { } launchedAt && _clock.UtcNow - launchedAt < RelaunchGuard)
+            {
+                return;
+            }
+
+            await EnsureLaunchTargetRunningAsync(AutomationTrigger.Hotkey, cancellationToken);
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            _logger.Error("launch-failed", exception, "실행 파일을 시작하지 못했습니다.");
+            FailSwitch(exception.Message);
+        }
+    }
+
     /// <summary>계정을 바꾼 뒤 런처를 다시 띄웁니다.</summary>
     private async Task StartLauncherAsync(CancellationToken cancellationToken)
     {
@@ -309,8 +360,12 @@ public sealed class AutomationEngine : IAsyncDisposable
             return;
         }
 
-        await _processes.StartAsync(_settings.LaunchExecutablePath, cancellationToken);
+        await _processes.StartAsync(
+            _settings.LaunchExecutablePath,
+            _settings.LaunchArguments,
+            cancellationToken);
         _launcherRestartedAt = _clock.UtcNow;
+        _lastLaunchAt = _launcherRestartedAt;
         _logger.Info("launch-restarted", "계정을 바꾼 뒤 실행 파일을 다시 시작했습니다.");
     }
 
@@ -330,6 +385,7 @@ public sealed class AutomationEngine : IAsyncDisposable
             LastRunAt = _clock.UtcNow;
             LastError = null;
             KeptCurrentDevice = false;
+            _audioSkippedThisRun = false;
             _logger.Info("automation-start", $"자동화를 시작합니다. trigger={trigger}");
 
             // 계정 전환은 오디오나 실행 파일을 건드리기 전에 끝낸다. 전환할 수 없으면
@@ -553,6 +609,18 @@ public sealed class AutomationEngine : IAsyncDisposable
             throw new InvalidOperationException("현재 기본 오디오 출력장치를 확인할 수 없습니다.");
         }
 
+        var endpoints = await _audio.GetOutputEndpointsAsync(cancellationToken);
+        var target = endpoints.FirstOrDefault(endpoint =>
+            endpoint.IsActive && endpoint.Id == _settings.TargetAudioEndpointId);
+        if (target is null)
+        {
+            // 헤드셋을 안 꽂았다고 게임까지 못 켜면 안 된다. 오디오만 건너뛰고 계속한다.
+            _audioSkippedThisRun = true;
+            LastError = "지정한 헤드셋이 연결되어 있지 않아 오디오는 바꾸지 않았습니다.";
+            _logger.Warning("audio-target-unavailable", LastError);
+            return;
+        }
+
         _startEntryEndpointId = currentEndpointId;
 
         // 이전 실행에서 전환한 장치가 아직 기본값이면(복원을 건너뛴 경우) 그때의
@@ -562,14 +630,6 @@ public sealed class AutomationEngine : IAsyncDisposable
             currentEndpointId != _managedAudioEndpointId)
         {
             _originalAudioEndpointId = currentEndpointId;
-        }
-
-        var endpoints = await _audio.GetOutputEndpointsAsync(cancellationToken);
-        var target = endpoints.FirstOrDefault(endpoint =>
-            endpoint.IsActive && endpoint.Id == _settings.TargetAudioEndpointId);
-        if (target is null)
-        {
-            throw new InvalidOperationException("지정한 헤드셋이 연결되어 있지 않습니다.");
         }
 
         _logger.Info("audio-original-saved", "원래 기본 오디오 장치를 세션에 저장했습니다.");
@@ -599,7 +659,11 @@ public sealed class AutomationEngine : IAsyncDisposable
             return;
         }
 
-        await _processes.StartAsync(_settings.LaunchExecutablePath, cancellationToken);
+        await _processes.StartAsync(
+            _settings.LaunchExecutablePath,
+            _settings.LaunchArguments,
+            cancellationToken);
+        _lastLaunchAt = _clock.UtcNow;
         _logger.Info("launch-started", "설정된 실행 파일을 시작했습니다.");
     }
 
@@ -853,7 +917,7 @@ public sealed class AutomationEngine : IAsyncDisposable
 
     private async Task RestoreIfSafeAsync(CancellationToken cancellationToken)
     {
-        if (!SwitchesAudio)
+        if (!SwitchesAudio || _audioSkippedThisRun)
         {
             // 애초에 오디오를 바꾸지 않은 자동화다. 되돌릴 것이 없으니 그대로 끝낸다.
             await CompleteAsync(cancellationToken, keepRestoreTarget: true);

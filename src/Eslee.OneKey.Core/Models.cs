@@ -71,6 +71,12 @@ public sealed record AutomationSettings
     public Guid? AccountProfileId { get; init; }
     public string WatchProcessName { get; init; } = string.Empty;
     public string LaunchExecutablePath { get; init; } = string.Empty;
+
+    /// <summary>
+    /// 실행 파일에 넘길 인자입니다. 런처만 띄우지 않고 게임까지 바로 시작하게 할 때
+    /// 씁니다. 비워 두면 인자 없이 실행합니다.
+    /// </summary>
+    public string LaunchArguments { get; init; } = string.Empty;
     public bool UseDiscordIntegration { get; init; }
     public string DiscordProcessName { get; init; } = "Discord";
     public string DiscordExecutablePath { get; init; } = string.Empty;
@@ -127,6 +133,17 @@ public sealed record AppSettings
     /// 재사용할 수 있고, 특정 게임에 묶이지 않습니다.
     /// </summary>
     public List<GameAccountProfile> AccountProfiles { get; init; } = [];
+
+    /// <summary>
+    /// 바탕화면에 띄우는 작은 버튼 창입니다. 켜 둔 자동화마다 버튼이 하나씩 생기고,
+    /// 누르면 그 자동화의 단축키를 누른 것과 같습니다.
+    /// </summary>
+    public bool ShowQuickButtons { get; init; }
+    public bool QuickButtonsTopmost { get; init; }
+
+    /// <summary>버튼 창을 마지막으로 둔 위치입니다. 없으면 화면 오른쪽 아래에 둡니다.</summary>
+    public double? QuickButtonsLeft { get; init; }
+    public double? QuickButtonsTop { get; init; }
 }
 
 public sealed record AutomationSession

@@ -1,0 +1,70 @@
+<Window x:Class="Eslee.OneKey.App.QuickLaunchWindow"
+        xmlns="http://schemas.microsoft.com/winfx/2006/xaml/presentation"
+        xmlns:x="http://schemas.microsoft.com/winfx/2006/xaml"
+        Title="eslee OneKey 버튼" WindowStyle="None" AllowsTransparency="True" Background="Transparent"
+        ShowInTaskbar="False" ShowActivated="False" ResizeMode="NoResize" SizeToContent="WidthAndHeight"
+        WindowStartupLocation="Manual">
+    <Window.Resources>
+        <!-- 앱 전역 버튼 스타일은 설정 화면용이라 여기서는 따로 그립니다. -->
+        <Style x:Key="QuickButton" TargetType="Button">
+            <Setter Property="Margin" Value="0,4,0,0" />
+            <Setter Property="MinWidth" Value="150" />
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Foreground" Value="White" />
+            <Setter Property="Background" Value="#6D5DFB" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="Button">
+                        <Border x:Name="Face" Background="{TemplateBinding Background}" CornerRadius="8"
+                                Padding="14,8" SnapsToDevicePixels="True">
+                            <ContentPresenter />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Face" Property="Background" Value="#8275FF" />
+                            </Trigger>
+                            <Trigger Property="IsPressed" Value="True">
+                                <Setter TargetName="Face" Property="Background" Value="#5446D6" />
+                            </Trigger>
+                            <Trigger Property="IsEnabled" Value="False">
+                                <Setter TargetName="Face" Property="Background" Value="#4A4766" />
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
+    </Window.Resources>
+
+    <!-- 버튼이 아닌 곳을 잡고 끌면 창이 움직입니다. -->
+    <Border Background="#F026233B" CornerRadius="12" Padding="12,8,12,12"
+            MouseLeftButtonDown="Surface_MouseLeftButtonDown">
+        <Border.ContextMenu>
+            <ContextMenu>
+                <MenuItem x:Name="TopmostMenuItem" Header="항상 위에 표시" IsCheckable="True" Click="Topmost_Click" />
+                <MenuItem Header="OneKey 열기" Click="OpenApp_Click" />
+                <Separator />
+                <MenuItem Header="버튼 숨기기" Click="Hide_Click" />
+            </ContextMenu>
+        </Border.ContextMenu>
+        <StackPanel>
+            <TextBlock Text="OneKey" Foreground="#B9B5D6" FontSize="11" FontWeight="SemiBold" Cursor="SizeAll" />
+            <ItemsControl x:Name="RuleButtons">
+                <ItemsControl.ItemTemplate>
+                    <DataTemplate>
+                        <Button Style="{StaticResource QuickButton}" Tag="{Binding Id}" Click="Rule_Click">
+                            <StackPanel>
+                                <TextBlock Text="{Binding Name}" FontWeight="SemiBold" FontSize="13" />
+                                <TextBlock Text="{Binding HotkeyText}" FontSize="10" Opacity="0.75" />
+                            </StackPanel>
+                        </Button>
+                    </DataTemplate>
+                </ItemsControl.ItemTemplate>
+            </ItemsControl>
+            <TextBlock x:Name="EmptyText" Text="켜 둔 자동화가 없습니다" Foreground="#B9B5D6" FontSize="11"
+                       Margin="0,6,0,0" Visibility="Collapsed" />
+            <TextBlock x:Name="StatusText" Foreground="#B9B5D6" FontSize="11" TextWrapping="Wrap" MaxWidth="190"
+                       Margin="0,8,0,0" Visibility="Collapsed" />
+        </StackPanel>
+    </Border>
+</Window>

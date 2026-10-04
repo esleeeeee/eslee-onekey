@@ -58,6 +58,8 @@ public partial class MainWindow : Window
     private bool _shuttingDown;
     private bool _initializationFailed;
     private bool _initializationErrorShown;
+    private QuickLaunchWindow? _quickWindow;
+    private string? _lastNotifiedError;
 
     private static readonly TimeSpan UpdateCheckInterval = TimeSpan.FromHours(24);
 
@@ -114,6 +116,7 @@ public partial class MainWindow : Window
             await RefreshAccountStatusesAsync();
             await RefreshAudioEndpointsAsync();
             await StartRuntimeAsync();
+            SyncQuickButtons();
             UpdateStatus();
 
             if (_startMinimized)
@@ -556,6 +559,7 @@ public partial class MainWindow : Window
         await _settingsStore.SaveAsync(_appSettings, CancellationToken.None);
         _logger?.Info("automation-rules-applied", logMessage);
         await StartRuntimeAsync();
+        SyncQuickButtons();
         UpdateStatus();
     }
 
@@ -575,10 +579,12 @@ public partial class MainWindow : Window
 
         UseProgramCheck.IsChecked = !string.IsNullOrWhiteSpace(rule.LaunchExecutablePath);
         LaunchPathText.Text = rule.LaunchExecutablePath;
+        LaunchArgumentsText.Text = rule.LaunchArguments;
         WatchProcessText.Text = rule.WatchProcessName;
 
         UseAccountCheck.IsChecked = rule.AccountProfileId is not null;
         var profile = CurrentAccountProfile();
+        CloseGameToSwitchCheck.IsChecked = profile?.CloseRunningGameToSwitch ?? false;
         SessionFilePathText.Text = profile?.SessionFilePath ?? string.Empty;
         LauncherProcessesText.Text = string.Join(", ", profile?.LauncherProcessNames ?? []);
         BlockingProcessesText.Text = string.Join(", ", profile?.BlockingProcessNames ?? []);
@@ -805,6 +811,7 @@ public partial class MainWindow : Window
             WinCheck.IsChecked == true,
             HotkeyText.Text.Trim()),
         LaunchExecutablePath = UseProgramCheck.IsChecked == true ? LaunchPathText.Text.Trim() : string.Empty,
+        LaunchArguments = UseProgramCheck.IsChecked == true ? LaunchArgumentsText.Text.Trim() : string.Empty,
         WatchProcessName = UseProgramCheck.IsChecked == true
             ? WindowsProcessService.NormalizeProcessName(WatchProcessText.Text)
             : string.Empty,
@@ -1040,6 +1047,7 @@ public partial class MainWindow : Window
         SessionFilePath = SessionFilePathText.Text.Trim(),
         LauncherProcessNames = SplitNames(LauncherProcessesText.Text),
         BlockingProcessNames = SplitNames(BlockingProcessesText.Text),
+        CloseRunningGameToSwitch = CloseGameToSwitchCheck.IsChecked == true,
     };
 
     private static List<string> SplitNames(string value) =>
@@ -1268,6 +1276,11 @@ public partial class MainWindow : Window
         try
         {
             CommitEditingRule();
+            // 계정 칸의 값은 등록 버튼을 누를 때만 저장되던 것이라, 여기서도 함께 저장한다.
+            if (UseAccountCheck.IsChecked == true && CurrentAccountProfile() is { } editedProfile)
+            {
+                SaveAccountProfile(ReadAccountProfileFromControls(editedProfile));
+            }
             ApplyGlobalsToRules();
             var existingToken = await _secretStore.LoadDiscordApiTokenAsync(CancellationToken.None);
             DiscordApiUrlPolicy.ValidateOptional(ApiUrlText.Text.Trim());
@@ -1292,6 +1305,7 @@ public partial class MainWindow : Window
             await _settingsStore.SaveAsync(_appSettings, CancellationToken.None);
             _logger?.Info("settings-saved", "자동화 규칙을 저장하고 다시 적용했습니다.");
             await StartRuntimeAsync();
+            SyncQuickButtons();
             RefreshRuleList(_editingRule);
             UpdateStatus();
             MessageBox.Show("자동화 규칙을 저장했습니다.", "eslee OneKey");
@@ -1324,6 +1338,8 @@ public partial class MainWindow : Window
     private void LoadGlobalSettingsIntoControls()
     {
         StartupCheck.IsChecked = _appSettings.StartWithWindows || _startup.IsEnabled();
+        QuickButtonsCheck.IsChecked = _appSettings.ShowQuickButtons;
+        QuickButtonsTopmostCheck.IsChecked = _appSettings.QuickButtonsTopmost;
         RpcClientIdText.Text = _appSettings.DiscordRpcClientId;
         ApiUrlText.Text = _appSettings.DiscordApiBaseUrl;
         DiscordPathText.Text = _appSettings.DiscordExecutablePath;
@@ -1373,6 +1389,8 @@ public partial class MainWindow : Window
             {
                 SchemaVersion = SettingsMigration.CurrentSchemaVersion,
                 StartWithWindows = StartupCheck.IsChecked == true,
+                ShowQuickButtons = QuickButtonsCheck.IsChecked == true,
+                QuickButtonsTopmost = QuickButtonsTopmostCheck.IsChecked == true,
                 DiscordRpcClientId = RpcClientIdText.Text.Trim(),
                 DiscordApiBaseUrl = ApiUrlText.Text.Trim(),
                 DiscordExecutablePath = DiscordPathText.Text.Trim(),
@@ -1387,6 +1405,7 @@ public partial class MainWindow : Window
                 Environment.ProcessPath ?? throw new InvalidOperationException("현재 실행 경로를 찾을 수 없습니다."));
             _logger?.Info("app-settings-saved", "앱 설정을 저장했습니다.");
             await StartRuntimeAsync();
+            SyncQuickButtons();
             UpdateStatus();
             MessageBox.Show("앱 설정을 저장했습니다.", "eslee OneKey");
         }
@@ -1578,7 +1597,119 @@ public partial class MainWindow : Window
                 : item.Id == activeId && running ? stateText : "대기 중";
         }
         _tray?.SetRestorePending(state == AutomationState.RestorePending);
+
+        var hasError = !string.IsNullOrWhiteSpace(error);
+        _quickWindow?.SetStatus(
+            hasError ? error : running ? $"{_engine?.ActiveRule.Name} · {stateText}" : null,
+            hasError);
+
+        // 창을 닫아 둔 채 단축키나 버튼만 쓰면 실패를 볼 길이 없다. 새 오류는 트레이로도 알린다.
+        var engineError = _engine?.LastError;
+        if (!string.IsNullOrWhiteSpace(engineError) && engineError != _lastNotifiedError)
+        {
+            _tray?.ShowBalloon("eslee OneKey", engineError);
+        }
+        _lastNotifiedError = engineError;
     }
+
+    /// <summary>설정에 맞춰 버튼 창을 띄우거나 닫고, 버튼 목록을 적용된 자동화와 맞춥니다.</summary>
+    private void SyncQuickButtons()
+    {
+        _tray?.SetQuickButtonsShown(_appSettings.ShowQuickButtons);
+        if (!_appSettings.ShowQuickButtons)
+        {
+            _quickWindow?.Close();
+            _quickWindow = null;
+            return;
+        }
+
+        var created = _quickWindow is null;
+        if (_quickWindow is null)
+        {
+            _quickWindow = new QuickLaunchWindow();
+            _quickWindow.RuleRequested += RunRuleFromQuickButtonAsync;
+            _quickWindow.PlacementChanged += QuickWindow_PlacementChanged;
+            _quickWindow.HideRequested += (_, _) => _ = SetQuickButtonsShownAsync(false);
+            _quickWindow.OpenAppRequested += (_, _) => OpenFromTray();
+        }
+
+        _quickWindow.SetRules(_appSettings.Automations);
+        _quickWindow.SetTopmost(_appSettings.QuickButtonsTopmost);
+        if (created)
+        {
+            // 크기를 알기 전에 한 번, 실제 크기가 정해진 뒤 한 번 더 자리를 잡는다.
+            _quickWindow.Place(_appSettings.QuickButtonsLeft, _appSettings.QuickButtonsTop);
+            _quickWindow.Show();
+            _quickWindow.Place(_appSettings.QuickButtonsLeft, _appSettings.QuickButtonsTop);
+        }
+    }
+
+    /// <summary>버튼은 단축키와 같은 경로로 자동화를 실행합니다.</summary>
+    private async Task RunRuleFromQuickButtonAsync(Guid ruleId)
+    {
+        if (_coordinator is null)
+        {
+            _quickWindow?.SetStatus("자동화가 준비되지 않았습니다.", isError: true);
+            return;
+        }
+        if (_paused)
+        {
+            _quickWindow?.SetStatus("자동화가 일시정지 상태입니다.", isError: true);
+            return;
+        }
+
+        try
+        {
+            await _coordinator.TriggerRuleAsync(ruleId);
+            UpdateStatus();
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            _logger?.Error("quick-button-failed", exception, "버튼으로 자동화를 실행하지 못했습니다.");
+            _quickWindow?.SetStatus(exception.Message, isError: true);
+        }
+    }
+
+    private async void QuickWindow_PlacementChanged(object? sender, EventArgs e)
+    {
+        if (_quickWindow is null)
+        {
+            return;
+        }
+
+        _appSettings = _appSettings with
+        {
+            QuickButtonsLeft = _quickWindow.Left,
+            QuickButtonsTop = _quickWindow.Top,
+            QuickButtonsTopmost = _quickWindow.Topmost,
+        };
+        QuickButtonsTopmostCheck.IsChecked = _quickWindow.Topmost;
+        await PersistQuietlyAsync();
+    }
+
+    private async Task SetQuickButtonsShownAsync(bool shown)
+    {
+        _appSettings = _appSettings with { ShowQuickButtons = shown };
+        QuickButtonsCheck.IsChecked = shown;
+        SyncQuickButtons();
+        await PersistQuietlyAsync();
+    }
+
+    /// <summary>버튼 창의 위치 같은 사소한 값을 저장합니다. 실패해도 동작에는 지장이 없습니다.</summary>
+    private async Task PersistQuietlyAsync()
+    {
+        try
+        {
+            await PersistAccountChangesAsync();
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            _logger?.Error("quick-buttons-save-failed", exception, "버튼 창 설정을 저장하지 못했습니다.");
+        }
+    }
+
+    public void ToggleQuickButtonsFromTray() =>
+        Dispatcher.Invoke(() => _ = SetQuickButtonsShownAsync(!_appSettings.ShowQuickButtons));
 
     private void TogglePaused()
     {
@@ -1688,6 +1819,8 @@ public partial class MainWindow : Window
         _logger?.Info("app-stop", "eslee OneKey를 종료했습니다.");
         _trayFolderLink?.Dispose();
         _trayFolderLink = null;
+        _quickWindow?.Close();
+        _quickWindow = null;
         _tray?.Dispose();
         _tray = null;
     }

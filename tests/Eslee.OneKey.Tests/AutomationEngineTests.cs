@@ -134,7 +134,7 @@ public sealed class AutomationEngineTests
     }
 
     [Fact]
-    public async Task DisconnectedTargetHeadsetFailsWithoutChangingAudio()
+    public async Task DisconnectedTargetHeadsetSkipsAudioButStillStarts()
     {
         var harness = Harness.Create();
         harness.Audio.Endpoints =
@@ -145,10 +145,17 @@ public sealed class AutomationEngineTests
 
         var result = await harness.Engine.StartAsync(AutomationTrigger.Hotkey);
 
-        Assert.False(result.Started);
+        // 헤드셋이 없다고 실행까지 막지 않는다. 오디오만 그대로 두고 알린다.
+        Assert.True(result.Started);
         Assert.Equal("speaker", harness.Audio.DefaultId);
         Assert.Empty(harness.Audio.SetCalls);
-        Assert.Equal(AutomationState.Failed, harness.Engine.State);
+        Assert.Equal(AutomationState.Active, harness.Engine.State);
+        Assert.NotNull(harness.Engine.LastError);
+
+        await harness.Engine.OnWatchedProcessExitedAsync();
+
+        Assert.Equal(AutomationState.Completed, harness.Engine.State);
+        Assert.Empty(harness.Audio.SetCalls);
     }
 
     [Fact]
@@ -594,6 +601,15 @@ internal sealed class FakeProcessService : IProcessService
         return Task.CompletedTask;
     }
 
+    public List<string> StartedArguments { get; } = [];
+
+    public Task StartAsync(string executablePath, string arguments, CancellationToken cancellationToken)
+    {
+        var started = StartAsync(executablePath, cancellationToken);
+        StartedArguments.Add(arguments);
+        return started;
+    }
+
     public Task<bool> BringToFrontAsync(string processName, CancellationToken cancellationToken)
     {
         BroughtToFront.Add(processName);
@@ -658,7 +674,7 @@ internal sealed class FakeSessionStore : ISessionStore
 
 internal sealed class FakeClock : ISystemClock
 {
-    public DateTimeOffset UtcNow { get; } = new(2026, 7, 20, 0, 0, 0, TimeSpan.Zero);
+    public DateTimeOffset UtcNow { get; set; } = new(2026, 7, 20, 0, 0, 0, TimeSpan.Zero);
     public Task DelayAsync(TimeSpan delay, CancellationToken cancellationToken) => Task.CompletedTask;
 }
 
