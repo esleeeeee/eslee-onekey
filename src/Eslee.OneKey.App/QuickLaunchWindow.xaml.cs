@@ -21,7 +21,7 @@ public partial class QuickLaunchWindow : Window
     public QuickLaunchWindow()
     {
         InitializeComponent();
-        SourceInitialized += (_, _) => HideFromTaskSwitcher();
+        SourceInitialized += (_, _) => HideFromTaskSwitcher(this);
     }
 
     /// <summary>버튼이 눌렸습니다. 끝날 때까지 그 버튼은 다시 눌리지 않습니다.</summary>
@@ -69,12 +69,7 @@ public partial class QuickLaunchWindow : Window
         UpdateLayout();
         var width = ActualWidth > 0 ? ActualWidth : 180;
         var height = ActualHeight > 0 ? ActualHeight : 120;
-        var visible = left is { } x && top is { } y &&
-            x >= SystemParameters.VirtualScreenLeft &&
-            y >= SystemParameters.VirtualScreenTop &&
-            x + width <= SystemParameters.VirtualScreenLeft + SystemParameters.VirtualScreenWidth &&
-            y + height <= SystemParameters.VirtualScreenTop + SystemParameters.VirtualScreenHeight;
-        if (visible)
+        if (FitsOnScreen(left, top, width, height))
         {
             Left = left!.Value;
             Top = top!.Value;
@@ -85,6 +80,13 @@ public partial class QuickLaunchWindow : Window
         Left = area.Right - width - 24;
         Top = area.Bottom - height - 24;
     }
+
+    internal static bool FitsOnScreen(double? left, double? top, double width, double height) =>
+        left is { } x && top is { } y &&
+        x >= SystemParameters.VirtualScreenLeft &&
+        y >= SystemParameters.VirtualScreenTop &&
+        x + width <= SystemParameters.VirtualScreenLeft + SystemParameters.VirtualScreenWidth &&
+        y + height <= SystemParameters.VirtualScreenTop + SystemParameters.VirtualScreenHeight;
 
     private async void Rule_Click(object sender, RoutedEventArgs e)
     {
@@ -149,9 +151,9 @@ public partial class QuickLaunchWindow : Window
         HideRequested?.Invoke(this, EventArgs.Empty);
 
     /// <summary>Alt+Tab 목록에 끼지 않게 합니다. 작업 창이 아니라 붙박이 버튼입니다.</summary>
-    private void HideFromTaskSwitcher()
+    internal static void HideFromTaskSwitcher(Window window)
     {
-        var handle = new WindowInteropHelper(this).Handle;
+        var handle = new WindowInteropHelper(window).Handle;
         SetWindowLongPtr(handle, GwlExStyle, GetWindowLongPtr(handle, GwlExStyle) | WsExToolWindow);
     }
 

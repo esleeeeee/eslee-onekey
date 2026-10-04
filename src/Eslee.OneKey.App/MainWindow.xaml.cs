@@ -59,6 +59,7 @@ public partial class MainWindow : Window
     private bool _initializationFailed;
     private bool _initializationErrorShown;
     private QuickLaunchWindow? _quickWindow;
+    private AudioQuickWindow? _audioWindow;
     private string? _lastNotifiedError;
 
     private static readonly TimeSpan UpdateCheckInterval = TimeSpan.FromHours(24);
@@ -794,6 +795,13 @@ public partial class MainWindow : Window
         var endpoints = await _audio.GetOutputEndpointsAsync(CancellationToken.None);
         AudioEndpointCombo.ItemsSource = endpoints;
         AudioEndpointCombo.SelectedValue = selected;
+
+        var speaker = QuickSpeakerCombo.SelectedValue as string ?? _appSettings.QuickSpeakerEndpointId;
+        var headset = QuickHeadsetCombo.SelectedValue as string ?? _appSettings.QuickHeadsetEndpointId;
+        QuickSpeakerCombo.ItemsSource = endpoints;
+        QuickSpeakerCombo.SelectedValue = speaker;
+        QuickHeadsetCombo.ItemsSource = endpoints;
+        QuickHeadsetCombo.SelectedValue = headset;
     }
 
     private AutomationSettings ReadAutomationFromControls() => new()
@@ -1356,6 +1364,7 @@ public partial class MainWindow : Window
         StartupCheck.IsChecked = _appSettings.StartWithWindows || _startup.IsEnabled();
         QuickButtonsCheck.IsChecked = _appSettings.ShowQuickButtons;
         QuickButtonsTopmostCheck.IsChecked = _appSettings.QuickButtonsTopmost;
+        AutoSwitchAudioCheck.IsChecked = _appSettings.AutoSwitchAudio;
         RpcClientIdText.Text = _appSettings.DiscordRpcClientId;
         ApiUrlText.Text = _appSettings.DiscordApiBaseUrl;
         DiscordPathText.Text = _appSettings.DiscordExecutablePath;
@@ -1407,6 +1416,9 @@ public partial class MainWindow : Window
                 StartWithWindows = StartupCheck.IsChecked == true,
                 ShowQuickButtons = QuickButtonsCheck.IsChecked == true,
                 QuickButtonsTopmost = QuickButtonsTopmostCheck.IsChecked == true,
+                AutoSwitchAudio = AutoSwitchAudioCheck.IsChecked == true,
+                QuickSpeakerEndpointId = QuickSpeakerCombo.SelectedValue as string ?? string.Empty,
+                QuickHeadsetEndpointId = QuickHeadsetCombo.SelectedValue as string ?? string.Empty,
                 DiscordRpcClientId = RpcClientIdText.Text.Trim(),
                 DiscordApiBaseUrl = ApiUrlText.Text.Trim(),
                 DiscordExecutablePath = DiscordPathText.Text.Trim(),
@@ -1619,6 +1631,9 @@ public partial class MainWindow : Window
             hasError ? error : running ? $"{_engine?.ActiveRule.Name} · {stateText}" : null,
             hasError);
 
+        // 자동화가 장치를 바꿨을 수 있으니 오디오 버튼의 강조도 다시 맞춘다.
+        _ = RefreshQuickAudioAsync();
+
         // 창을 닫아 둔 채 단축키나 버튼만 쓰면 실패를 볼 길이 없다. 새 오류는 트레이로도 알린다.
         var engineError = _engine?.LastError;
         if (!string.IsNullOrWhiteSpace(engineError) && engineError != _lastNotifiedError)
@@ -1632,8 +1647,14 @@ public partial class MainWindow : Window
     private void SyncQuickButtons()
     {
         _tray?.SetQuickButtonsShown(_appSettings.ShowQuickButtons);
+        if (_engine is not null)
+        {
+            _engine.AudioSwitchingEnabled = _appSettings.AutoSwitchAudio;
+        }
         if (!_appSettings.ShowQuickButtons)
         {
+            _audioWindow?.Close();
+            _audioWindow = null;
             _quickWindow?.Close();
             _quickWindow = null;
             return;
@@ -1662,6 +1683,184 @@ public partial class MainWindow : Window
             _quickWindow.Place(_appSettings.QuickButtonsLeft, _appSettings.QuickButtonsTop);
             _quickWindow.Show();
             _quickWindow.Place(_appSettings.QuickButtonsLeft, _appSettings.QuickButtonsTop);
+            // 붙어 있는 오디오 창은 이 창이 움직이거나 커질 때 함께 따라간다.
+            _quickWindow.LocationChanged += (_, _) => PlaceAudioWindow();
+            _quickWindow.SizeChanged += (_, _) => PlaceAudioWindow();
+        }
+
+        SyncAudioWindow();
+    }
+
+    /// <summary>오디오 버튼 창은 자동화 버튼 창과 함께 뜨고 함께 닫힙니다.</summary>
+    private void SyncAudioWindow()
+    {
+        if (_audioWindow is null)
+        {
+            _audioWindow = new AudioQuickWindow();
+            _audioWindow.AutoSwitchToggleRequested += (_, _) =>
+                _ = SetAutoSwitchAudioAsync(!_appSettings.AutoSwitchAudio);
+            _audioWindow.VolumeMixerRequested += (_, _) => OpenVolumeMixer();
+            _audioWindow.DeviceRequested += headset => _ = SwitchQuickAudioAsync(headset);
+            // 다른 곳에서 장치를 바꿨을 수 있으니 마우스를 올릴 때 강조를 다시 맞춘다.
+            _audioWindow.MouseEnter += (_, _) => _ = RefreshQuickAudioAsync();
+            _audioWindow.SizeChanged += (_, _) => PlaceAudioWindow();
+            var magnet = new WindowMagnet(_audioWindow, () => _quickWindow);
+            magnet.Dropped += AudioWindow_Dropped;
+            _audioWindow.Show();
+        }
+
+        _audioWindow.Topmost = _appSettings.QuickButtonsTopmost;
+        _audioWindow.SetAutoSwitch(_appSettings.AutoSwitchAudio);
+        PlaceAudioWindow();
+        _ = RefreshQuickAudioAsync();
+    }
+
+    /// <summary>헤드셋을 따로 고르지 않았으면 자동화에 지정된 출력 장치를 헤드셋으로 봅니다.</summary>
+    private string QuickHeadsetEndpointId =>
+        !string.IsNullOrWhiteSpace(_appSettings.QuickHeadsetEndpointId)
+            ? _appSettings.QuickHeadsetEndpointId
+            : _appSettings.Automations
+                .Select(rule => rule.TargetAudioEndpointId)
+                .FirstOrDefault(id => !string.IsNullOrWhiteSpace(id)) ?? string.Empty;
+
+    /// <summary>버튼을 누르면 자동화와 상관없이 바로 그 장치를 기본 출력으로 만듭니다.</summary>
+    private async Task SwitchQuickAudioAsync(bool headset)
+    {
+        var name = headset ? "헤드셋" : "스피커";
+        var endpointId = headset ? QuickHeadsetEndpointId : _appSettings.QuickSpeakerEndpointId;
+        if (string.IsNullOrWhiteSpace(endpointId))
+        {
+            _quickWindow?.SetStatus($"앱 설정에서 {name} 장치를 먼저 고르세요.", isError: true);
+            OpenFromTray();
+            MainTabs.SelectedIndex = 1;
+            return;
+        }
+
+        try
+        {
+            var endpoints = await _audio.GetOutputEndpointsAsync(CancellationToken.None);
+            if (!endpoints.Any(endpoint => endpoint.IsActive && endpoint.Id == endpointId))
+            {
+                _quickWindow?.SetStatus($"{name} 장치가 연결되어 있지 않습니다.", isError: true);
+                return;
+            }
+
+            await _audio.SetDefaultOutputAsync(endpointId, CancellationToken.None);
+            _logger?.Info("quick-audio-switched", $"버튼으로 기본 출력을 {name}(으)로 바꿨습니다.");
+            _quickWindow?.SetStatus(null, isError: false);
+        }
+        catch (Exception exception) when (exception is COMException
+            or InvalidCastException
+            or InvalidOperationException)
+        {
+            _logger?.Error("quick-audio-failed", exception, "버튼으로 오디오 장치를 바꾸지 못했습니다.");
+            _quickWindow?.SetStatus($"{name}(으)로 바꾸지 못했습니다.", isError: true);
+        }
+        await RefreshQuickAudioAsync();
+    }
+
+    private async Task RefreshQuickAudioAsync()
+    {
+        if (_audioWindow is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var current = await _audio.GetDefaultOutputIdAsync(CancellationToken.None);
+            _audioWindow?.SetActiveDevice(
+                string.IsNullOrWhiteSpace(current) ? null
+                : current == QuickHeadsetEndpointId ? true
+                : current == _appSettings.QuickSpeakerEndpointId ? false
+                : null);
+        }
+        catch (Exception exception) when (exception is COMException or InvalidCastException)
+        {
+            _audioWindow?.SetActiveDevice(null);
+        }
+    }
+
+    /// <summary>
+    /// 붙어 있으면 자동화 버튼 창의 그 변에 맞춰 두고, 떨어져 있으면 마지막 자리에 둡니다.
+    /// 저장된 자리가 화면 밖이면 아래쪽에 다시 붙입니다.
+    /// </summary>
+    private void PlaceAudioWindow()
+    {
+        if (_quickWindow is null || _audioWindow is null)
+        {
+            return;
+        }
+
+        var offset = _appSettings.AudioButtonsDockOffset;
+        var side = Enum.TryParse<DockSide>(_appSettings.AudioButtonsDock, out var parsed) ? parsed : DockSide.None;
+        if (side == DockSide.None)
+        {
+            if (QuickLaunchWindow.FitsOnScreen(
+                    _appSettings.AudioButtonsLeft,
+                    _appSettings.AudioButtonsTop,
+                    _audioWindow.ActualWidth,
+                    _audioWindow.ActualHeight))
+            {
+                _audioWindow.Left = _appSettings.AudioButtonsLeft!.Value;
+                _audioWindow.Top = _appSettings.AudioButtonsTop!.Value;
+                return;
+            }
+            side = DockSide.Bottom;
+            offset = 0;
+        }
+
+        var (left, top) = side switch
+        {
+            DockSide.Left => (_quickWindow.Left - _audioWindow.ActualWidth - WindowMagnet.GapDip, _quickWindow.Top + offset),
+            DockSide.Right => (_quickWindow.Left + _quickWindow.ActualWidth + WindowMagnet.GapDip, _quickWindow.Top + offset),
+            DockSide.Top => (_quickWindow.Left + offset, _quickWindow.Top - _audioWindow.ActualHeight - WindowMagnet.GapDip),
+            _ => (_quickWindow.Left + offset, _quickWindow.Top + _quickWindow.ActualHeight + WindowMagnet.GapDip),
+        };
+        _audioWindow.Left = left;
+        _audioWindow.Top = top;
+    }
+
+    private async void AudioWindow_Dropped(DockSide side, double offset)
+    {
+        if (_audioWindow is null)
+        {
+            return;
+        }
+
+        _appSettings = _appSettings with
+        {
+            AudioButtonsDock = side == DockSide.None ? string.Empty : side.ToString(),
+            AudioButtonsDockOffset = offset,
+            AudioButtonsLeft = _audioWindow.Left,
+            AudioButtonsTop = _audioWindow.Top,
+        };
+        await PersistQuietlyAsync();
+    }
+
+    private async Task SetAutoSwitchAudioAsync(bool enabled)
+    {
+        _appSettings = _appSettings with { AutoSwitchAudio = enabled };
+        AutoSwitchAudioCheck.IsChecked = enabled;
+        if (_engine is not null)
+        {
+            _engine.AudioSwitchingEnabled = enabled;
+        }
+        _audioWindow?.SetAutoSwitch(enabled);
+        _logger?.Info("audio-auto-switch", enabled ? "오디오 자동 전환을 켰습니다." : "오디오 자동 전환을 껐습니다.");
+        await PersistQuietlyAsync();
+    }
+
+    private void OpenVolumeMixer()
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo("sndvol.exe") { UseShellExecute = true });
+        }
+        catch (Exception exception) when (exception is Win32Exception or InvalidOperationException)
+        {
+            _logger?.Error("volume-mixer-failed", exception, "볼륨 믹서를 열지 못했습니다.");
+            _quickWindow?.SetStatus("볼륨 믹서를 열지 못했습니다.", isError: true);
         }
     }
 
@@ -1705,6 +1904,10 @@ public partial class MainWindow : Window
             QuickButtonsTopmost = _quickWindow.Topmost,
         };
         QuickButtonsTopmostCheck.IsChecked = _quickWindow.Topmost;
+        if (_audioWindow is not null)
+        {
+            _audioWindow.Topmost = _quickWindow.Topmost;
+        }
         await PersistQuietlyAsync();
     }
 
@@ -1840,6 +2043,8 @@ public partial class MainWindow : Window
         _logger?.Info("app-stop", "eslee OneKey를 종료했습니다.");
         _trayFolderLink?.Dispose();
         _trayFolderLink = null;
+        _audioWindow?.Close();
+        _audioWindow = null;
         _quickWindow?.Close();
         _quickWindow = null;
         _tray?.Dispose();

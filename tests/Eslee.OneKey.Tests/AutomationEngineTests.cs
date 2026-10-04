@@ -134,6 +134,20 @@ public sealed class AutomationEngineTests
     }
 
     [Fact]
+    public async Task DisabledAudioSwitchingLeavesTheDeviceAloneFromStartToExit()
+    {
+        var harness = Harness.Create();
+        harness.Engine.AudioSwitchingEnabled = false;
+
+        var result = await harness.Engine.StartAsync(AutomationTrigger.Hotkey);
+        await harness.Engine.OnWatchedProcessExitedAsync();
+
+        Assert.True(result.Started);
+        Assert.Empty(harness.Audio.SetCalls);
+        Assert.Equal(AutomationState.Completed, harness.Engine.State);
+    }
+
+    [Fact]
     public async Task DisconnectedTargetHeadsetSkipsAudioButStillStarts()
     {
         var harness = Harness.Create();

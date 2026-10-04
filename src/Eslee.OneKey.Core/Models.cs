@@ -144,6 +144,30 @@ public sealed record AppSettings
     /// <summary>버튼 창을 마지막으로 둔 위치입니다. 없으면 화면 오른쪽 아래에 둡니다.</summary>
     public double? QuickButtonsLeft { get; init; }
     public double? QuickButtonsTop { get; init; }
+
+    /// <summary>
+    /// 자동화를 시작할 때 지정한 출력 장치로 바꿀지 여부입니다. 끄면 자동화에 장치가
+    /// 지정돼 있어도 오디오는 그대로 둡니다. 바탕화면의 오디오 버튼으로 바로 켜고 끕니다.
+    /// </summary>
+    public bool AutoSwitchAudio { get; init; } = true;
+
+    /// <summary>
+    /// 오디오 버튼 창의 스피커, 헤드셋 버튼이 바로 전환할 출력 장치입니다. 헤드셋을 비워
+    /// 두면 자동화에 지정된 출력 장치를 씁니다.
+    /// </summary>
+    public string QuickSpeakerEndpointId { get; init; } = string.Empty;
+    public string QuickHeadsetEndpointId { get; init; } = string.Empty;
+
+    /// <summary>
+    /// 오디오 버튼 창이 자동화 버튼 창의 어느 쪽에 붙어 있는지입니다. Left, Right, Top,
+    /// Bottom 중 하나이고, 비어 있으면 떨어져 있는 것이라 아래 좌표를 씁니다.
+    /// </summary>
+    public string AudioButtonsDock { get; init; } = "Bottom";
+
+    /// <summary>붙은 변을 따라 얼마나 밀려 있는지입니다.</summary>
+    public double AudioButtonsDockOffset { get; init; }
+    public double? AudioButtonsLeft { get; init; }
+    public double? AudioButtonsTop { get; init; }
 }
 
 public sealed record AutomationSession

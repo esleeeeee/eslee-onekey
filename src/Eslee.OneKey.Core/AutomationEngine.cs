@@ -104,6 +104,12 @@ public sealed class AutomationEngine : IAsyncDisposable
     /// 상태 표시에서 실제 복원과 유지를 구분하는 데 사용합니다.
     /// </summary>
     public bool KeptCurrentDevice { get; private set; }
+
+    /// <summary>
+    /// 끄면 자동화에 출력 장치가 지정돼 있어도 오디오를 건드리지 않습니다. 다음 시작부터
+    /// 적용되며, 이미 바꿔 둔 실행의 복원에는 영향을 주지 않습니다.
+    /// </summary>
+    public bool AudioSwitchingEnabled { get; set; } = true;
     public event EventHandler? StateChanged;
 
     public Task<AutomationStartResult> StartAsync(
@@ -400,9 +406,15 @@ public sealed class AutomationEngine : IAsyncDisposable
 
             // 출력 장치를 지정하지 않은 자동화는 오디오를 건드리지 않는다. 실행이나
             // Discord만 쓰려는 구성이 오디오 때문에 실패하면 안 된다.
-            if (SwitchesAudio)
+            if (SwitchesAudio && AudioSwitchingEnabled)
             {
                 await SwitchAudioAsync(cancellationToken);
+            }
+            else if (SwitchesAudio)
+            {
+                // 사용자가 자동 전환을 꺼 두었다. 바꾸지 않았으니 끝날 때 되돌릴 것도 없다.
+                _audioSkippedThisRun = true;
+                _logger.Info("audio-switch-disabled", "오디오 자동 전환이 꺼져 있어 현재 장치를 유지합니다.");
             }
             else
             {

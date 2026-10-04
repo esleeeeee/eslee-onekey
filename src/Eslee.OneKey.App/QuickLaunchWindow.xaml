@@ -102,7 +102,7 @@
                     <TextBlock Text="다른 계정으로 로그인하기" FontSize="12" />
                 </Button>
             </StackPanel>
-            <TextBlock x:Name="StatusText" Foreground="#B9B5D6" FontSize="11" TextWrapping="Wrap" MaxWidth="190"
+            <TextBlock x:Name="StatusText" Foreground="#B9B5D6" FontSize="11" TextWrapping="Wrap" MaxWidth="150"
                        Margin="0,8,0,0" Visibility="Collapsed" />
         </StackPanel>
     </Border>
