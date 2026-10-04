@@ -34,6 +34,36 @@
                 </Setter.Value>
             </Setter>
         </Style>
+
+        <!-- 글꼴에 따라 화살표 글자가 깨질 수 있어 선으로 직접 그립니다. -->
+        <Style x:Key="Chevron" TargetType="ToggleButton">
+            <Setter Property="Cursor" Value="Hand" />
+            <Setter Property="Focusable" Value="False" />
+            <Setter Property="Template">
+                <Setter.Value>
+                    <ControlTemplate TargetType="ToggleButton">
+                        <Border x:Name="Face" Background="Transparent" CornerRadius="6" Height="16">
+                            <Path x:Name="Arrow" Data="M0,0 L6,5 L12,0" Stroke="#B9B5D6" StrokeThickness="1.6"
+                                  StrokeStartLineCap="Round" StrokeEndLineCap="Round" StrokeLineJoin="Round"
+                                  HorizontalAlignment="Center" VerticalAlignment="Center"
+                                  RenderTransformOrigin="0.5,0.5" />
+                        </Border>
+                        <ControlTemplate.Triggers>
+                            <Trigger Property="IsMouseOver" Value="True">
+                                <Setter TargetName="Face" Property="Background" Value="#3D3A57" />
+                            </Trigger>
+                            <Trigger Property="IsChecked" Value="True">
+                                <Setter TargetName="Arrow" Property="RenderTransform">
+                                    <Setter.Value>
+                                        <RotateTransform Angle="180" />
+                                    </Setter.Value>
+                                </Setter>
+                            </Trigger>
+                        </ControlTemplate.Triggers>
+                    </ControlTemplate>
+                </Setter.Value>
+            </Setter>
+        </Style>
     </Window.Resources>
 
     <!-- 버튼이 아닌 곳을 잡고 끌면 창이 움직입니다. -->
@@ -63,6 +93,15 @@
             </ItemsControl>
             <TextBlock x:Name="EmptyText" Text="켜 둔 자동화가 없습니다" Foreground="#B9B5D6" FontSize="11"
                        Margin="0,6,0,0" Visibility="Collapsed" />
+            <!-- 가끔만 쓰는 기능은 화살표를 눌러야 펼쳐집니다. -->
+            <ToggleButton x:Name="MoreToggle" Style="{StaticResource Chevron}" Margin="0,6,0,0"
+                          ToolTip="더 보기" Checked="More_Changed" Unchecked="More_Changed" />
+            <StackPanel x:Name="MorePanel" Visibility="Collapsed">
+                <Button Style="{StaticResource QuickButton}" Background="#3D3A57" Click="OtherAccount_Click"
+                        ToolTip="지금 계정은 보관해 두고 로그인 화면을 엽니다. 로그아웃은 하지 않습니다.">
+                    <TextBlock Text="다른 계정으로 로그인하기" FontSize="12" />
+                </Button>
+            </StackPanel>
             <TextBlock x:Name="StatusText" Foreground="#B9B5D6" FontSize="11" TextWrapping="Wrap" MaxWidth="190"
                        Margin="0,8,0,0" Visibility="Collapsed" />
         </StackPanel>

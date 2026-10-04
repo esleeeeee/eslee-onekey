@@ -32,6 +32,9 @@ public partial class QuickLaunchWindow : Window
     public event EventHandler? HideRequested;
     public event EventHandler? OpenAppRequested;
 
+    /// <summary>지금 계정을 보관해 두고 다른 계정으로 로그인할 화면을 열어 달라는 요청입니다.</summary>
+    public event Func<Task>? OtherAccountSignInRequested;
+
     public void SetRules(IEnumerable<AutomationSettings> rules)
     {
         var items = rules
@@ -94,6 +97,27 @@ public partial class QuickLaunchWindow : Window
         try
         {
             await handler(id);
+        }
+        finally
+        {
+            button.IsEnabled = true;
+        }
+    }
+
+    private void More_Changed(object sender, RoutedEventArgs e) =>
+        MorePanel.Visibility = MoreToggle.IsChecked == true ? Visibility.Visible : Visibility.Collapsed;
+
+    private async void OtherAccount_Click(object sender, RoutedEventArgs e)
+    {
+        if (sender is not Button button || OtherAccountSignInRequested is not { } handler)
+        {
+            return;
+        }
+
+        button.IsEnabled = false;
+        try
+        {
+            await handler();
         }
         finally
         {

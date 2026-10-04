@@ -964,21 +964,47 @@ public partial class MainWindow : Window
     /// </summary>
     private async void OpenOtherAccountSignIn_Click(object sender, RoutedEventArgs e)
     {
+        var (succeeded, message) = await OpenOtherAccountSignInAsync(
+            CurrentAccountProfile(),
+            _automation.LaunchExecutablePath);
+        await RefreshAccountStatusesAsync();
+        MessageBox.Show(
+            message,
+            "계정 로그인",
+            MessageBoxButton.OK,
+            succeeded ? MessageBoxImage.Information : MessageBoxImage.Warning);
+    }
+
+    /// <summary>
+    /// 설정 화면과 바탕화면 버튼이 함께 쓰는 경로입니다. 프로필이나 실행 파일을 주지
+    /// 않으면 저장된 설정에서 쓸 수 있는 첫 값을 고릅니다. 결과는 문구로 돌려주고,
+    /// 어떻게 보여 줄지는 부른 쪽이 정합니다.
+    /// </summary>
+    private async Task<(bool Succeeded, string Message)> OpenOtherAccountSignInAsync(
+        GameAccountProfile? profile,
+        string? executablePath)
+    {
         if (CreateAccountSessionService() is not { } service)
         {
-            return;
+            return (false, "계정 전환 기능이 아직 준비되지 않았습니다.");
         }
 
-        var profile = CurrentAccountProfile() ?? _appSettings.AccountProfiles.FirstOrDefault();
+        profile ??= _appSettings.AccountProfiles.FirstOrDefault(candidate =>
+            !string.IsNullOrWhiteSpace(candidate.SessionFilePath));
         if (profile is null)
         {
-            MessageBox.Show("먼저 현재 로그인 계정을 한 번 등록하세요.", "계정 로그인");
-            return;
+            return (false, "먼저 현재 로그인 계정을 한 번 등록하세요.");
+        }
+
+        if (string.IsNullOrWhiteSpace(executablePath))
+        {
+            executablePath = _appSettings.Automations
+                .Select(rule => rule.LaunchExecutablePath)
+                .FirstOrDefault(path => !string.IsNullOrWhiteSpace(path));
         }
 
         try
         {
-            var executablePath = _automation.LaunchExecutablePath;
             var result = await AutomationEngine.RunAccountMaintenanceAsync(async () =>
             {
                 var prepared = await service.PrepareForNewSignInAsync(profile, CancellationToken.None);
@@ -986,29 +1012,19 @@ public partial class MainWindow : Window
                     await _processes.StartAsync(executablePath, CancellationToken.None);
                 return prepared;
             });
-            await RefreshAccountStatusesAsync();
             if (!result.CanContinue)
             {
-                MessageBox.Show(result.Message ?? "로그인 화면을 열지 못했습니다.", "계정 로그인");
-                return;
+                return (false, result.Message ?? "로그인 화면을 열지 못했습니다.");
             }
 
-            if (string.IsNullOrWhiteSpace(_automation.LaunchExecutablePath))
-            {
-                MessageBox.Show(
-                    "로그인되지 않은 상태로 만들었습니다. 실행 파일이 없어 런처는 직접 실행해 주세요.",
-                    "계정 로그인");
-                return;
-            }
-
-            MessageBox.Show(
-                "로그인 화면을 열었습니다. 다른 계정으로 로그인한 뒤 그 자동화에서 현재 로그인 계정 등록을 누르세요.",
-                "계정 로그인");
+            return string.IsNullOrWhiteSpace(executablePath)
+                ? (true, "로그인되지 않은 상태로 만들었습니다. 실행 파일이 없어 런처는 직접 실행해 주세요.")
+                : (true, "로그인 화면을 열었습니다. 다른 계정으로 로그인한 뒤 그 자동화에서 현재 로그인 계정 등록을 누르세요.");
         }
         catch (Exception exception)
         {
             _logger?.Error("account-signin-open-failed", exception, "로그인 화면을 열지 못했습니다.");
-            MessageBox.Show(exception.Message, "계정 로그인", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return (false, exception.Message);
         }
     }
 
@@ -1631,6 +1647,11 @@ public partial class MainWindow : Window
             _quickWindow.PlacementChanged += QuickWindow_PlacementChanged;
             _quickWindow.HideRequested += (_, _) => _ = SetQuickButtonsShownAsync(false);
             _quickWindow.OpenAppRequested += (_, _) => OpenFromTray();
+            _quickWindow.OtherAccountSignInRequested += async () =>
+            {
+                var (succeeded, message) = await OpenOtherAccountSignInAsync(profile: null, executablePath: null);
+                _quickWindow?.SetStatus(message, isError: !succeeded);
+            };
         }
 
         _quickWindow.SetRules(_appSettings.Automations);
