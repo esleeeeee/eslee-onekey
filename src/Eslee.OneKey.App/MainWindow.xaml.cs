@@ -58,6 +58,9 @@ public partial class MainWindow : Window
     private bool _shuttingDown;
     private bool _initializationFailed;
     private bool _initializationErrorShown;
+    private QuickLaunchWindow? _quickWindow;
+    private AudioQuickWindow? _audioWindow;
+    private string? _lastNotifiedError;
 
     private static readonly TimeSpan UpdateCheckInterval = TimeSpan.FromHours(24);
 
@@ -114,6 +117,7 @@ public partial class MainWindow : Window
             await RefreshAccountStatusesAsync();
             await RefreshAudioEndpointsAsync();
             await StartRuntimeAsync();
+            SyncQuickButtons();
             UpdateStatus();
 
             if (_startMinimized)
@@ -556,6 +560,7 @@ public partial class MainWindow : Window
         await _settingsStore.SaveAsync(_appSettings, CancellationToken.None);
         _logger?.Info("automation-rules-applied", logMessage);
         await StartRuntimeAsync();
+        SyncQuickButtons();
         UpdateStatus();
     }
 
@@ -575,10 +580,12 @@ public partial class MainWindow : Window
 
         UseProgramCheck.IsChecked = !string.IsNullOrWhiteSpace(rule.LaunchExecutablePath);
         LaunchPathText.Text = rule.LaunchExecutablePath;
+        LaunchArgumentsText.Text = rule.LaunchArguments;
         WatchProcessText.Text = rule.WatchProcessName;
 
         UseAccountCheck.IsChecked = rule.AccountProfileId is not null;
         var profile = CurrentAccountProfile();
+        CloseGameToSwitchCheck.IsChecked = profile?.CloseRunningGameToSwitch ?? false;
         SessionFilePathText.Text = profile?.SessionFilePath ?? string.Empty;
         LauncherProcessesText.Text = string.Join(", ", profile?.LauncherProcessNames ?? []);
         BlockingProcessesText.Text = string.Join(", ", profile?.BlockingProcessNames ?? []);
@@ -788,6 +795,13 @@ public partial class MainWindow : Window
         var endpoints = await _audio.GetOutputEndpointsAsync(CancellationToken.None);
         AudioEndpointCombo.ItemsSource = endpoints;
         AudioEndpointCombo.SelectedValue = selected;
+
+        var speaker = QuickSpeakerCombo.SelectedValue as string ?? _appSettings.QuickSpeakerEndpointId;
+        var headset = QuickHeadsetCombo.SelectedValue as string ?? _appSettings.QuickHeadsetEndpointId;
+        QuickSpeakerCombo.ItemsSource = endpoints;
+        QuickSpeakerCombo.SelectedValue = speaker;
+        QuickHeadsetCombo.ItemsSource = endpoints;
+        QuickHeadsetCombo.SelectedValue = headset;
     }
 
     private AutomationSettings ReadAutomationFromControls() => new()
@@ -805,6 +819,7 @@ public partial class MainWindow : Window
             WinCheck.IsChecked == true,
             HotkeyText.Text.Trim()),
         LaunchExecutablePath = UseProgramCheck.IsChecked == true ? LaunchPathText.Text.Trim() : string.Empty,
+        LaunchArguments = UseProgramCheck.IsChecked == true ? LaunchArgumentsText.Text.Trim() : string.Empty,
         WatchProcessName = UseProgramCheck.IsChecked == true
             ? WindowsProcessService.NormalizeProcessName(WatchProcessText.Text)
             : string.Empty,
@@ -957,21 +972,47 @@ public partial class MainWindow : Window
     /// </summary>
     private async void OpenOtherAccountSignIn_Click(object sender, RoutedEventArgs e)
     {
+        var (succeeded, message) = await OpenOtherAccountSignInAsync(
+            CurrentAccountProfile(),
+            _automation.LaunchExecutablePath);
+        await RefreshAccountStatusesAsync();
+        MessageBox.Show(
+            message,
+            "계정 로그인",
+            MessageBoxButton.OK,
+            succeeded ? MessageBoxImage.Information : MessageBoxImage.Warning);
+    }
+
+    /// <summary>
+    /// 설정 화면과 바탕화면 버튼이 함께 쓰는 경로입니다. 프로필이나 실행 파일을 주지
+    /// 않으면 저장된 설정에서 쓸 수 있는 첫 값을 고릅니다. 결과는 문구로 돌려주고,
+    /// 어떻게 보여 줄지는 부른 쪽이 정합니다.
+    /// </summary>
+    private async Task<(bool Succeeded, string Message)> OpenOtherAccountSignInAsync(
+        GameAccountProfile? profile,
+        string? executablePath)
+    {
         if (CreateAccountSessionService() is not { } service)
         {
-            return;
+            return (false, "계정 전환 기능이 아직 준비되지 않았습니다.");
         }
 
-        var profile = CurrentAccountProfile() ?? _appSettings.AccountProfiles.FirstOrDefault();
+        profile ??= _appSettings.AccountProfiles.FirstOrDefault(candidate =>
+            !string.IsNullOrWhiteSpace(candidate.SessionFilePath));
         if (profile is null)
         {
-            MessageBox.Show("먼저 현재 로그인 계정을 한 번 등록하세요.", "계정 로그인");
-            return;
+            return (false, "먼저 현재 로그인 계정을 한 번 등록하세요.");
+        }
+
+        if (string.IsNullOrWhiteSpace(executablePath))
+        {
+            executablePath = _appSettings.Automations
+                .Select(rule => rule.LaunchExecutablePath)
+                .FirstOrDefault(path => !string.IsNullOrWhiteSpace(path));
         }
 
         try
         {
-            var executablePath = _automation.LaunchExecutablePath;
             var result = await AutomationEngine.RunAccountMaintenanceAsync(async () =>
             {
                 var prepared = await service.PrepareForNewSignInAsync(profile, CancellationToken.None);
@@ -979,29 +1020,19 @@ public partial class MainWindow : Window
                     await _processes.StartAsync(executablePath, CancellationToken.None);
                 return prepared;
             });
-            await RefreshAccountStatusesAsync();
             if (!result.CanContinue)
             {
-                MessageBox.Show(result.Message ?? "로그인 화면을 열지 못했습니다.", "계정 로그인");
-                return;
+                return (false, result.Message ?? "로그인 화면을 열지 못했습니다.");
             }
 
-            if (string.IsNullOrWhiteSpace(_automation.LaunchExecutablePath))
-            {
-                MessageBox.Show(
-                    "로그인되지 않은 상태로 만들었습니다. 실행 파일이 없어 런처는 직접 실행해 주세요.",
-                    "계정 로그인");
-                return;
-            }
-
-            MessageBox.Show(
-                "로그인 화면을 열었습니다. 다른 계정으로 로그인한 뒤 그 자동화에서 현재 로그인 계정 등록을 누르세요.",
-                "계정 로그인");
+            return string.IsNullOrWhiteSpace(executablePath)
+                ? (true, "로그인되지 않은 상태로 만들었습니다. 실행 파일이 없어 런처는 직접 실행해 주세요.")
+                : (true, "로그인 화면을 열었습니다. 다른 계정으로 로그인한 뒤 그 자동화에서 현재 로그인 계정 등록을 누르세요.");
         }
         catch (Exception exception)
         {
             _logger?.Error("account-signin-open-failed", exception, "로그인 화면을 열지 못했습니다.");
-            MessageBox.Show(exception.Message, "계정 로그인", MessageBoxButton.OK, MessageBoxImage.Warning);
+            return (false, exception.Message);
         }
     }
 
@@ -1040,6 +1071,7 @@ public partial class MainWindow : Window
         SessionFilePath = SessionFilePathText.Text.Trim(),
         LauncherProcessNames = SplitNames(LauncherProcessesText.Text),
         BlockingProcessNames = SplitNames(BlockingProcessesText.Text),
+        CloseRunningGameToSwitch = CloseGameToSwitchCheck.IsChecked == true,
     };
 
     private static List<string> SplitNames(string value) =>
@@ -1268,6 +1300,11 @@ public partial class MainWindow : Window
         try
         {
             CommitEditingRule();
+            // 계정 칸의 값은 등록 버튼을 누를 때만 저장되던 것이라, 여기서도 함께 저장한다.
+            if (UseAccountCheck.IsChecked == true && CurrentAccountProfile() is { } editedProfile)
+            {
+                SaveAccountProfile(ReadAccountProfileFromControls(editedProfile));
+            }
             ApplyGlobalsToRules();
             var existingToken = await _secretStore.LoadDiscordApiTokenAsync(CancellationToken.None);
             DiscordApiUrlPolicy.ValidateOptional(ApiUrlText.Text.Trim());
@@ -1292,6 +1329,7 @@ public partial class MainWindow : Window
             await _settingsStore.SaveAsync(_appSettings, CancellationToken.None);
             _logger?.Info("settings-saved", "자동화 규칙을 저장하고 다시 적용했습니다.");
             await StartRuntimeAsync();
+            SyncQuickButtons();
             RefreshRuleList(_editingRule);
             UpdateStatus();
             MessageBox.Show("자동화 규칙을 저장했습니다.", "eslee OneKey");
@@ -1324,6 +1362,9 @@ public partial class MainWindow : Window
     private void LoadGlobalSettingsIntoControls()
     {
         StartupCheck.IsChecked = _appSettings.StartWithWindows || _startup.IsEnabled();
+        QuickButtonsCheck.IsChecked = _appSettings.ShowQuickButtons;
+        QuickButtonsTopmostCheck.IsChecked = _appSettings.QuickButtonsTopmost;
+        AutoSwitchAudioCheck.IsChecked = _appSettings.AutoSwitchAudio;
         RpcClientIdText.Text = _appSettings.DiscordRpcClientId;
         ApiUrlText.Text = _appSettings.DiscordApiBaseUrl;
         DiscordPathText.Text = _appSettings.DiscordExecutablePath;
@@ -1373,6 +1414,11 @@ public partial class MainWindow : Window
             {
                 SchemaVersion = SettingsMigration.CurrentSchemaVersion,
                 StartWithWindows = StartupCheck.IsChecked == true,
+                ShowQuickButtons = QuickButtonsCheck.IsChecked == true,
+                QuickButtonsTopmost = QuickButtonsTopmostCheck.IsChecked == true,
+                AutoSwitchAudio = AutoSwitchAudioCheck.IsChecked == true,
+                QuickSpeakerEndpointId = QuickSpeakerCombo.SelectedValue as string ?? string.Empty,
+                QuickHeadsetEndpointId = QuickHeadsetCombo.SelectedValue as string ?? string.Empty,
                 DiscordRpcClientId = RpcClientIdText.Text.Trim(),
                 DiscordApiBaseUrl = ApiUrlText.Text.Trim(),
                 DiscordExecutablePath = DiscordPathText.Text.Trim(),
@@ -1387,6 +1433,7 @@ public partial class MainWindow : Window
                 Environment.ProcessPath ?? throw new InvalidOperationException("현재 실행 경로를 찾을 수 없습니다."));
             _logger?.Info("app-settings-saved", "앱 설정을 저장했습니다.");
             await StartRuntimeAsync();
+            SyncQuickButtons();
             UpdateStatus();
             MessageBox.Show("앱 설정을 저장했습니다.", "eslee OneKey");
         }
@@ -1578,7 +1625,351 @@ public partial class MainWindow : Window
                 : item.Id == activeId && running ? stateText : "대기 중";
         }
         _tray?.SetRestorePending(state == AutomationState.RestorePending);
+
+        var hasError = !string.IsNullOrWhiteSpace(error);
+        _quickWindow?.SetStatus(
+            hasError ? error : running ? $"{_engine?.ActiveRule.Name} · {stateText}" : null,
+            hasError);
+
+        // 자동화가 장치를 바꿨을 수 있으니 오디오 버튼의 강조도 다시 맞춘다.
+        _ = RefreshQuickAudioAsync();
+
+        // 창을 닫아 둔 채 단축키나 버튼만 쓰면 실패를 볼 길이 없다. 새 오류는 트레이로도 알린다.
+        var engineError = _engine?.LastError;
+        if (!string.IsNullOrWhiteSpace(engineError) && engineError != _lastNotifiedError)
+        {
+            _tray?.ShowBalloon("eslee OneKey", engineError);
+        }
+        _lastNotifiedError = engineError;
     }
+
+    /// <summary>설정에 맞춰 버튼 창을 띄우거나 닫고, 버튼 목록을 적용된 자동화와 맞춥니다.</summary>
+    private void SyncQuickButtons()
+    {
+        _tray?.SetQuickButtonsShown(_appSettings.ShowQuickButtons);
+        if (_engine is not null)
+        {
+            _engine.AudioSwitchingEnabled = _appSettings.AutoSwitchAudio;
+        }
+        if (!_appSettings.ShowQuickButtons)
+        {
+            _audioWindow?.Close();
+            _audioWindow = null;
+            _quickWindow?.Close();
+            _quickWindow = null;
+            return;
+        }
+
+        var created = _quickWindow is null;
+        if (_quickWindow is null)
+        {
+            _quickWindow = new QuickLaunchWindow();
+            _quickWindow.RuleRequested += RunRuleFromQuickButtonAsync;
+            _quickWindow.PlacementChanged += QuickWindow_PlacementChanged;
+            _quickWindow.HideRequested += (_, _) => _ = SetQuickButtonsShownAsync(false);
+            _quickWindow.OpenAppRequested += (_, _) => OpenFromTray();
+            _quickWindow.OtherAccountSignInRequested += async () =>
+            {
+                var (succeeded, message) = await OpenOtherAccountSignInAsync(profile: null, executablePath: null);
+                _quickWindow?.SetStatus(message, isError: !succeeded);
+            };
+        }
+
+        _quickWindow.SetRules(_appSettings.Automations);
+        _quickWindow.SetTopmost(_appSettings.QuickButtonsTopmost);
+        if (created)
+        {
+            // 크기를 알기 전에 한 번, 실제 크기가 정해진 뒤 한 번 더 자리를 잡는다.
+            _quickWindow.Place(_appSettings.QuickButtonsLeft, _appSettings.QuickButtonsTop);
+            _quickWindow.Show();
+            _quickWindow.Place(_appSettings.QuickButtonsLeft, _appSettings.QuickButtonsTop);
+            // 붙어 있는 오디오 창은 이 창이 움직이거나 커질 때 함께 따라간다.
+            _quickWindow.LocationChanged += (_, _) => PlaceAudioWindow();
+            _quickWindow.SizeChanged += (_, _) => PlaceAudioWindow();
+        }
+
+        SyncAudioWindow();
+    }
+
+    /// <summary>오디오 버튼 창은 자동화 버튼 창과 함께 뜨고 함께 닫힙니다.</summary>
+    private void SyncAudioWindow()
+    {
+        if (_audioWindow is null)
+        {
+            _audioWindow = new AudioQuickWindow();
+            _audioWindow.AutoSwitchToggleRequested += (_, _) =>
+                _ = SetAutoSwitchAudioAsync(!_appSettings.AutoSwitchAudio);
+            _audioWindow.VolumeMixerRequested += (_, _) => OpenVolumeMixer();
+            _audioWindow.DeviceRequested += headset => _ = SwitchQuickAudioAsync(headset);
+            // 다른 곳에서 장치를 바꿨을 수 있으니 마우스를 올릴 때 강조를 다시 맞춘다.
+            _audioWindow.MouseEnter += (_, _) => _ = RefreshQuickAudioAsync();
+            _audioWindow.SizeChanged += (_, _) => PlaceAudioWindow();
+            var magnet = new WindowMagnet(_audioWindow, () => _quickWindow);
+            magnet.Dropped += AudioWindow_Dropped;
+            _audioWindow.Show();
+        }
+
+        _audioWindow.Topmost = _appSettings.QuickButtonsTopmost;
+        _audioWindow.SetAutoSwitch(_appSettings.AutoSwitchAudio);
+        PlaceAudioWindow();
+        _ = RefreshQuickAudioAsync();
+    }
+
+    /// <summary>헤드셋을 따로 고르지 않았으면 자동화에 지정된 출력 장치를 헤드셋으로 봅니다.</summary>
+    private string QuickHeadsetEndpointId =>
+        !string.IsNullOrWhiteSpace(_appSettings.QuickHeadsetEndpointId)
+            ? _appSettings.QuickHeadsetEndpointId
+            : _appSettings.Automations
+                .Select(rule => rule.TargetAudioEndpointId)
+                .FirstOrDefault(id => !string.IsNullOrWhiteSpace(id)) ?? string.Empty;
+
+    /// <summary>버튼을 누르면 자동화와 상관없이 바로 그 장치를 기본 출력으로 만듭니다.</summary>
+    private async Task SwitchQuickAudioAsync(bool headset)
+    {
+        var name = headset ? "헤드셋" : "스피커";
+        var endpointId = headset ? QuickHeadsetEndpointId : _appSettings.QuickSpeakerEndpointId;
+        if (string.IsNullOrWhiteSpace(endpointId))
+        {
+            _quickWindow?.SetStatus($"앱 설정에서 {name} 장치를 먼저 고르세요.", isError: true);
+            OpenFromTray();
+            MainTabs.SelectedIndex = 1;
+            return;
+        }
+
+        try
+        {
+            var endpoints = await _audio.GetOutputEndpointsAsync(CancellationToken.None);
+            if (!endpoints.Any(endpoint => endpoint.IsActive && endpoint.Id == endpointId))
+            {
+                _quickWindow?.SetStatus($"{name} 장치가 연결되어 있지 않습니다.", isError: true);
+                return;
+            }
+
+            await _audio.SetDefaultOutputAsync(endpointId, CancellationToken.None);
+            _logger?.Info("quick-audio-switched", $"버튼으로 기본 출력을 {name}(으)로 바꿨습니다.");
+            _quickWindow?.SetStatus(null, isError: false);
+        }
+        catch (Exception exception) when (exception is COMException
+            or InvalidCastException
+            or InvalidOperationException)
+        {
+            _logger?.Error("quick-audio-failed", exception, "버튼으로 오디오 장치를 바꾸지 못했습니다.");
+            _quickWindow?.SetStatus($"{name}(으)로 바꾸지 못했습니다.", isError: true);
+        }
+        await RefreshQuickAudioAsync();
+    }
+
+    private async Task RefreshQuickAudioAsync()
+    {
+        if (_audioWindow is null)
+        {
+            return;
+        }
+
+        try
+        {
+            var current = await _audio.GetDefaultOutputIdAsync(CancellationToken.None);
+            _audioWindow?.SetActiveDevice(
+                string.IsNullOrWhiteSpace(current) ? null
+                : current == QuickHeadsetEndpointId ? true
+                : current == _appSettings.QuickSpeakerEndpointId ? false
+                : null);
+        }
+        catch (Exception exception) when (exception is COMException or InvalidCastException)
+        {
+            _audioWindow?.SetActiveDevice(null);
+        }
+    }
+
+    /// <summary>
+    /// 붙어 있으면 자동화 버튼 창의 그 변에 맞춰 두고, 떨어져 있으면 마지막 자리에 둡니다.
+    /// 저장된 자리가 화면 밖이면 아래쪽에 다시 붙입니다.
+    /// </summary>
+    private bool _placingAudioWindow;
+
+    private void PlaceAudioWindow()
+    {
+        if (_placingAudioWindow) return;
+        _placingAudioWindow = true;
+        try { PlaceAudioWindowCore(); }
+        finally { _placingAudioWindow = false; }
+    }
+
+    private void PlaceAudioWindowCore()
+    {
+        if (_quickWindow is null || _audioWindow is null)
+        {
+            return;
+        }
+
+        var offset = _appSettings.AudioButtonsDockOffset;
+        var side = Enum.TryParse<DockSide>(_appSettings.AudioButtonsDock, out var parsed) ? parsed : DockSide.None;
+        if (side == DockSide.None)
+        {
+            if (QuickLaunchWindow.FitsOnScreen(
+                    _appSettings.AudioButtonsLeft,
+                    _appSettings.AudioButtonsTop,
+                    _audioWindow.ActualWidth,
+                    _audioWindow.ActualHeight))
+            {
+                _audioWindow.Left = _appSettings.AudioButtonsLeft!.Value;
+                _audioWindow.Top = _appSettings.AudioButtonsTop!.Value;
+                return;
+            }
+            side = DockSide.Bottom;
+            offset = 0;
+        }
+
+        var (left, top) = side switch
+        {
+            DockSide.Left => (_quickWindow.Left - _audioWindow.ActualWidth - WindowMagnet.GapDip, _quickWindow.Top + offset),
+            DockSide.Right => (_quickWindow.Left + _quickWindow.ActualWidth + WindowMagnet.GapDip, _quickWindow.Top + offset),
+            DockSide.Top => (_quickWindow.Left + offset, _quickWindow.Top - _audioWindow.ActualHeight - WindowMagnet.GapDip),
+            _ => (_quickWindow.Left + offset, _quickWindow.Top + _quickWindow.ActualHeight + WindowMagnet.GapDip),
+        };
+        // 두 창이 붙은 상태의 전체 경계를 작업 영역 안으로 옮긴다.
+        // 기본 위치는 오른쪽 아래이므로 아래에 붙인 오디오 창이 잘리기 쉽다.
+        var screen = System.Windows.Forms.Screen.FromHandle(
+            new WindowInteropHelper(_quickWindow).Handle);
+        var transform = PresentationSource.FromVisual(_quickWindow)?.CompositionTarget?.TransformFromDevice
+            ?? System.Windows.Media.Matrix.Identity;
+        var origin = transform.Transform(new System.Windows.Point(screen.WorkingArea.Left, screen.WorkingArea.Top));
+        var corner = transform.Transform(new System.Windows.Point(screen.WorkingArea.Right, screen.WorkingArea.Bottom));
+        var area = new System.Windows.Rect(origin, corner);
+        var minLeft = Math.Min(_quickWindow.Left, left);
+        var minTop = Math.Min(_quickWindow.Top, top);
+        var maxRight = Math.Max(_quickWindow.Left + _quickWindow.ActualWidth,
+            left + _audioWindow.ActualWidth);
+        var maxBottom = Math.Max(_quickWindow.Top + _quickWindow.ActualHeight,
+            top + _audioWindow.ActualHeight);
+        var shiftX = Math.Max(area.Left - minLeft, Math.Min(0, area.Right - maxRight));
+        var shiftY = Math.Max(area.Top - minTop, Math.Min(0, area.Bottom - maxBottom));
+        if (shiftX != 0 || shiftY != 0)
+        {
+            // LocationChanged가 이 메서드를 다시 호출하므로 먼저 오디오 창을 맞춘다.
+            _audioWindow.Left = left + shiftX;
+            _audioWindow.Top = top + shiftY;
+            _quickWindow.Left += shiftX;
+            _quickWindow.Top += shiftY;
+            return;
+        }
+        _audioWindow.Left = left;
+        _audioWindow.Top = top;
+    }
+
+    private async void AudioWindow_Dropped(DockSide side, double offset)
+    {
+        if (_audioWindow is null)
+        {
+            return;
+        }
+
+        _appSettings = _appSettings with
+        {
+            AudioButtonsDock = side == DockSide.None ? string.Empty : side.ToString(),
+            AudioButtonsDockOffset = offset,
+            AudioButtonsLeft = _audioWindow.Left,
+            AudioButtonsTop = _audioWindow.Top,
+        };
+        await PersistQuietlyAsync();
+    }
+
+    private async Task SetAutoSwitchAudioAsync(bool enabled)
+    {
+        _appSettings = _appSettings with { AutoSwitchAudio = enabled };
+        AutoSwitchAudioCheck.IsChecked = enabled;
+        if (_engine is not null)
+        {
+            _engine.AudioSwitchingEnabled = enabled;
+        }
+        _audioWindow?.SetAutoSwitch(enabled);
+        _logger?.Info("audio-auto-switch", enabled ? "오디오 자동 전환을 켰습니다." : "오디오 자동 전환을 껐습니다.");
+        await PersistQuietlyAsync();
+    }
+
+    private void OpenVolumeMixer()
+    {
+        try
+        {
+            Process.Start(new ProcessStartInfo("sndvol.exe") { UseShellExecute = true });
+        }
+        catch (Exception exception) when (exception is Win32Exception or InvalidOperationException)
+        {
+            _logger?.Error("volume-mixer-failed", exception, "볼륨 믹서를 열지 못했습니다.");
+            _quickWindow?.SetStatus("볼륨 믹서를 열지 못했습니다.", isError: true);
+        }
+    }
+
+    /// <summary>버튼은 단축키와 같은 경로로 자동화를 실행합니다.</summary>
+    private async Task RunRuleFromQuickButtonAsync(Guid ruleId)
+    {
+        if (_coordinator is null)
+        {
+            _quickWindow?.SetStatus("자동화가 준비되지 않았습니다.", isError: true);
+            return;
+        }
+        if (_paused)
+        {
+            _quickWindow?.SetStatus("자동화가 일시정지 상태입니다.", isError: true);
+            return;
+        }
+
+        try
+        {
+            await _coordinator.TriggerRuleAsync(ruleId);
+            UpdateStatus();
+        }
+        catch (Exception exception) when (exception is not OperationCanceledException)
+        {
+            _logger?.Error("quick-button-failed", exception, "버튼으로 자동화를 실행하지 못했습니다.");
+            _quickWindow?.SetStatus(exception.Message, isError: true);
+        }
+    }
+
+    private async void QuickWindow_PlacementChanged(object? sender, EventArgs e)
+    {
+        if (_quickWindow is null)
+        {
+            return;
+        }
+
+        _appSettings = _appSettings with
+        {
+            QuickButtonsLeft = _quickWindow.Left,
+            QuickButtonsTop = _quickWindow.Top,
+            QuickButtonsTopmost = _quickWindow.Topmost,
+        };
+        QuickButtonsTopmostCheck.IsChecked = _quickWindow.Topmost;
+        if (_audioWindow is not null)
+        {
+            _audioWindow.Topmost = _quickWindow.Topmost;
+        }
+        await PersistQuietlyAsync();
+    }
+
+    private async Task SetQuickButtonsShownAsync(bool shown)
+    {
+        _appSettings = _appSettings with { ShowQuickButtons = shown };
+        QuickButtonsCheck.IsChecked = shown;
+        SyncQuickButtons();
+        await PersistQuietlyAsync();
+    }
+
+    /// <summary>버튼 창의 위치 같은 사소한 값을 저장합니다. 실패해도 동작에는 지장이 없습니다.</summary>
+    private async Task PersistQuietlyAsync()
+    {
+        try
+        {
+            await PersistAccountChangesAsync();
+        }
+        catch (Exception exception) when (exception is IOException or UnauthorizedAccessException)
+        {
+            _logger?.Error("quick-buttons-save-failed", exception, "버튼 창 설정을 저장하지 못했습니다.");
+        }
+    }
+
+    public void ToggleQuickButtonsFromTray() =>
+        Dispatcher.Invoke(() => _ = SetQuickButtonsShownAsync(!_appSettings.ShowQuickButtons));
 
     private void TogglePaused()
     {
@@ -1688,6 +2079,10 @@ public partial class MainWindow : Window
         _logger?.Info("app-stop", "eslee OneKey를 종료했습니다.");
         _trayFolderLink?.Dispose();
         _trayFolderLink = null;
+        _audioWindow?.Close();
+        _audioWindow = null;
+        _quickWindow?.Close();
+        _quickWindow = null;
         _tray?.Dispose();
         _tray = null;
     }

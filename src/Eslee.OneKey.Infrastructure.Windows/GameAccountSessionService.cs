@@ -61,6 +61,9 @@ public sealed class GameAccountSessionService(
     /// <summary>런처가 저장본을 받아들였는지 지켜보는 총 시간입니다.</summary>
     private static readonly int ConfirmAttempts = 20;
 
+    /// <summary>종료를 요청한 게임이 실제로 사라질 때까지 기다리는 횟수입니다.</summary>
+    private static readonly int GameExitWaitAttempts = 20;
+
     private TimeSpan PollInterval => confirmPollInterval ?? TimeSpan.FromSeconds(1);
 
     private static string PathKey(string path) => Fingerprint(Path.GetFullPath(path).ToUpperInvariant());
@@ -148,14 +151,13 @@ public sealed class GameAccountSessionService(
             return await PreserveUnknownAsync(profile, live!, cancellationToken);
         }
 
-        foreach (var process in profile.BlockingProcessNames)
+        if (!await CloseRunningGameAsync(profile, cancellationToken))
         {
-            if (await processes.IsRunningAsync(process, cancellationToken))
-            {
-                return new GameSessionResult(
-                    GameSessionOutcome.BlockedByRunningGame,
-                    "게임이 실행 중이라 계정을 전환하지 않았습니다. 게임을 종료한 뒤 다시 시도하세요.");
-            }
+            return new GameSessionResult(
+                GameSessionOutcome.BlockedByRunningGame,
+                profile.CloseRunningGameToSwitch
+                    ? "실행 중인 게임을 종료하지 못해 계정을 전환하지 않았습니다. 게임을 직접 종료한 뒤 다시 시도하세요."
+                    : "게임이 실행 중이라 계정을 전환하지 않았습니다. 게임을 종료한 뒤 다시 시도하세요.");
         }
 
         try
@@ -463,6 +465,77 @@ public sealed class GameAccountSessionService(
         foreach (var name in profile.LauncherProcessNames)
             if (await processes.IsRunningAsync(name, cancellationToken))
                 throw new IOException("런처 종료를 확인하지 못했습니다.");
+    }
+
+    /// <summary>
+    /// 게임이 실행 중이 아니면 true입니다. 실행 중이면 프로필이 허락한 경우에만 종료하고,
+    /// 정말 사라졌는지 확인한 뒤 true를 돌려줍니다. 게임이 살아 있는 채로 세션을 바꾸면
+    /// 런처가 예전 계정으로 파일을 다시 써 버립니다.
+    /// </summary>
+    private async Task<bool> CloseRunningGameAsync(
+        GameAccountProfile profile,
+        CancellationToken cancellationToken)
+    {
+        var running = new List<string>();
+        foreach (var name in profile.BlockingProcessNames)
+        {
+            if (await processes.IsRunningAsync(name, cancellationToken))
+            {
+                running.Add(name);
+            }
+        }
+
+        if (running.Count == 0)
+        {
+            return true;
+        }
+        if (!profile.CloseRunningGameToSwitch)
+        {
+            return false;
+        }
+
+        logger.Info("account-switch-closing-game", "계정을 바꾸기 위해 실행 중인 게임을 종료합니다.");
+        foreach (var name in running)
+        {
+            try
+            {
+                await processes.StopAsync(name, cancellationToken);
+            }
+            catch (Exception exception) when (exception is Win32Exception
+                or InvalidOperationException
+                or NotSupportedException)
+            {
+                // 보호된 프로세스는 직접 못 끌 수 있다. 런처를 닫으면 따라 꺼지므로 아래에서 확인한다.
+                logger.Warning(
+                    "account-switch-close-game-failed",
+                    $"게임 프로세스를 직접 종료하지 못했습니다. ({exception.GetType().Name})");
+            }
+        }
+
+        // 게임은 런처에 붙어 있어서 런처가 사라지면 스스로 종료한다.
+        try
+        {
+            await CloseLauncherAsync(profile, cancellationToken);
+        }
+        catch (Exception exception) when (exception is IOException or Win32Exception)
+        {
+            return false;
+        }
+
+        for (var attempt = 0; attempt < GameExitWaitAttempts; attempt++)
+        {
+            var alive = false;
+            foreach (var name in running)
+            {
+                alive |= await processes.IsRunningAsync(name, cancellationToken);
+            }
+            if (!alive)
+            {
+                return true;
+            }
+            await Task.Delay(PollInterval, cancellationToken);
+        }
+        return false;
     }
 
     private static async Task<string?> ReadFingerprintAsync(

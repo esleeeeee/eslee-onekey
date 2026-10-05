@@ -22,6 +22,12 @@ public sealed record GameAccountProfile
 
     /// <summary>이 프로세스가 살아 있으면 계정을 전환하지 않습니다(실행 중인 게임).</summary>
     public List<string> BlockingProcessNames { get; init; } = [];
+
+    /// <summary>
+    /// 켜면 게임이 실행 중이어도 게임을 종료하고 계정을 전환합니다. 기본값은 꺼짐이며,
+    /// 꺼져 있으면 실행 중인 게임을 건드리지 않고 전환을 거절합니다.
+    /// </summary>
+    public bool CloseRunningGameToSwitch { get; init; }
 }
 
 public enum GameSessionOutcome

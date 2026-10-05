@@ -124,6 +124,54 @@ public sealed class AutomationRuleTests
     }
 
     [Fact]
+    public async Task PressingTheSameRuleAgainFocusesTheRunningGame()
+    {
+        var korea = Rule("한국", "V", Korea.Id);
+        var harness = Create(korea);
+        await harness.Engine.StartRuleAsync(korea, Korea);
+        harness.Sessions.Result = new GameSessionResult(GameSessionOutcome.AlreadyActive);
+        harness.Processes.Running.Add("game");
+        var started = harness.Processes.StartedPaths.Count;
+
+        await harness.Engine.StartRuleAsync(korea, Korea);
+
+        Assert.Equal(started, harness.Processes.StartedPaths.Count);
+        Assert.Contains("game", harness.Processes.BroughtToFront);
+    }
+
+    [Fact]
+    public async Task PressingTheSameRuleAgainLaunchesWhenOnlyTheLauncherIsLeft()
+    {
+        var korea = Rule("한국", "V", Korea.Id);
+        var sessions = new FakeGameSessionService();
+        var processes = new FakeProcessService();
+        var clock = new FakeClock();
+        var engine = new AutomationEngine(
+            korea, new FakeAudioService(), processes, new FakeVoiceClient([]), new FakeSessionStore(),
+            clock, new FakeLogger(), voiceChannelAutoJoin: null, accountSessions: sessions);
+        await engine.StartRuleAsync(korea, Korea);
+        sessions.Result = new GameSessionResult(GameSessionOutcome.AlreadyActive);
+        var started = processes.StartedPaths.Count;
+
+        // 게임이 끝내 뜨지 않은 채 시간이 지났다면 다시 눌렀을 때 실행해야 한다.
+        clock.UtcNow += TimeSpan.FromMinutes(1);
+        await engine.StartRuleAsync(korea, Korea);
+
+        Assert.Equal(started + 1, processes.StartedPaths.Count);
+    }
+
+    [Fact]
+    public async Task LaunchArgumentsArePassedToTheExecutable()
+    {
+        var korea = Rule("한국", "V", Korea.Id) with { LaunchArguments = "--start-game" };
+        var harness = Create(korea);
+
+        await harness.Engine.StartRuleAsync(korea, Korea);
+
+        Assert.Equal(["--start-game"], harness.Processes.StartedArguments);
+    }
+
+    [Fact]
     public async Task ARuleWithoutAnAccountNeverTouchesAccounts()
     {
         var plain = Rule("계정 없음", "G", profileId: null);

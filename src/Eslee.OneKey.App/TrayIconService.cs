@@ -8,6 +8,7 @@ public sealed class TrayIconService : IDisposable
 {
     private readonly Forms.NotifyIcon _icon;
     private readonly Forms.ToolStripMenuItem _pauseItem;
+    private readonly Forms.ToolStripMenuItem _quickButtonsItem;
 
     public TrayIconService(MainWindow window)
     {
@@ -17,6 +18,9 @@ public sealed class TrayIconService : IDisposable
         var menu = new Forms.ContextMenuStrip();
         menu.Items.Add("OneKey 열기", null, (_, _) => window.OpenFromTray());
         menu.Items.Add(_pauseItem);
+        _quickButtonsItem = new Forms.ToolStripMenuItem("바탕화면 버튼 표시");
+        _quickButtonsItem.Click += (_, _) => window.ToggleQuickButtonsFromTray();
+        menu.Items.Add(_quickButtonsItem);
         menu.Items.Add("현재 상태 확인", null, (_, _) => window.ShowCurrentStatus());
         menu.Items.Add(new Forms.ToolStripSeparator());
         menu.Items.Add("종료", null, (_, _) => window.ExitApplication());
@@ -72,6 +76,8 @@ public sealed class TrayIconService : IDisposable
         _pauseItem.Checked = paused;
         UpdateText();
     }
+
+    public void SetQuickButtonsShown(bool shown) => _quickButtonsItem.Checked = shown;
 
     public void SetRestorePending(bool pending)
     {

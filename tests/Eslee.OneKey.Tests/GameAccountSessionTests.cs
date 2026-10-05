@@ -130,6 +130,27 @@ public sealed class GameAccountSessionTests : IDisposable
     }
 
     [Fact]
+    public async Task RunningGameIsClosedWhenTheProfileAllowsIt()
+    {
+        var (service, processes) = CreateService();
+        var korea = Profile("한국 계정") with { CloseRunningGameToSwitch = true };
+        var asia = Profile("아시아 계정");
+        await File.WriteAllTextAsync(LauncherSessionFile, "session-korea");
+        await service.CaptureAsync(korea, CancellationToken.None);
+        await File.WriteAllTextAsync(LauncherSessionFile, "session-asia");
+        await service.CaptureAsync(asia, CancellationToken.None);
+        processes.Running.Add("game");
+        processes.Running.Add("launcher");
+
+        var result = await service.ActivateAsync(korea, CancellationToken.None);
+
+        Assert.Equal(GameSessionOutcome.Switched, result.Outcome);
+        Assert.Contains("game", processes.Stopped);
+        Assert.Contains("launcher", processes.Stopped);
+        Assert.Equal("session-korea", await File.ReadAllTextAsync(LauncherSessionFile));
+    }
+
+    [Fact]
     public async Task ProfileWithoutAStoredSessionAsksForEnrollment()
     {
         var (service, _) = CreateService();
