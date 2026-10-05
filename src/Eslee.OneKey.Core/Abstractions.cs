@@ -11,6 +11,14 @@ public interface IProcessService
 {
     Task<bool> IsRunningAsync(string processName, CancellationToken cancellationToken);
     Task StartAsync(string executablePath, CancellationToken cancellationToken);
+
+    /// <summary>
+    /// 실행 인자를 붙여 시작합니다. 런처에게 어떤 게임을 띄울지 알려 줄 때 씁니다.
+    /// 인자를 다루지 않는 구현은 인자 없이 시작합니다.
+    /// </summary>
+    Task StartAsync(string executablePath, string arguments, CancellationToken cancellationToken) =>
+        StartAsync(executablePath, cancellationToken);
+
     Task<bool> BringToFrontAsync(string processName, CancellationToken cancellationToken);
 
     /// <summary>이름이 같은 프로세스를 닫습니다. 이미 없으면 아무 일도 하지 않습니다.</summary>

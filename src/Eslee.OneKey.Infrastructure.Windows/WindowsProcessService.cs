@@ -28,14 +28,21 @@ public sealed class WindowsProcessService : IProcessService
         }
     }
 
-    public Task StartAsync(string executablePath, CancellationToken cancellationToken)
+    public Task StartAsync(string executablePath, CancellationToken cancellationToken) =>
+        StartAsync(executablePath, string.Empty, cancellationToken);
+
+    public Task StartAsync(string executablePath, string arguments, CancellationToken cancellationToken)
     {
         cancellationToken.ThrowIfCancellationRequested();
         if (!File.Exists(executablePath))
         {
             throw new FileNotFoundException("실행 파일을 찾을 수 없습니다.", executablePath);
         }
-        Process.Start(new ProcessStartInfo(executablePath) { UseShellExecute = true });
+        Process.Start(new ProcessStartInfo(executablePath)
+        {
+            UseShellExecute = true,
+            Arguments = arguments ?? string.Empty,
+        });
         return Task.CompletedTask;
     }
 

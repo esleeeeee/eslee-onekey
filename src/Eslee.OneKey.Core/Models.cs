@@ -71,6 +71,12 @@ public sealed record AutomationSettings
     public Guid? AccountProfileId { get; init; }
     public string WatchProcessName { get; init; } = string.Empty;
     public string LaunchExecutablePath { get; init; } = string.Empty;
+
+    /// <summary>
+    /// 실행 파일에 넘길 인자입니다. 런처만 띄우지 않고 게임까지 바로 시작하게 할 때
+    /// 씁니다. 비워 두면 인자 없이 실행합니다.
+    /// </summary>
+    public string LaunchArguments { get; init; } = string.Empty;
     public bool UseDiscordIntegration { get; init; }
     public string DiscordProcessName { get; init; } = "Discord";
     public string DiscordExecutablePath { get; init; } = string.Empty;
@@ -127,6 +133,41 @@ public sealed record AppSettings
     /// 재사용할 수 있고, 특정 게임에 묶이지 않습니다.
     /// </summary>
     public List<GameAccountProfile> AccountProfiles { get; init; } = [];
+
+    /// <summary>
+    /// 바탕화면에 띄우는 작은 버튼 창입니다. 켜 둔 자동화마다 버튼이 하나씩 생기고,
+    /// 누르면 그 자동화의 단축키를 누른 것과 같습니다.
+    /// </summary>
+    public bool ShowQuickButtons { get; init; }
+    public bool QuickButtonsTopmost { get; init; }
+
+    /// <summary>버튼 창을 마지막으로 둔 위치입니다. 없으면 화면 오른쪽 아래에 둡니다.</summary>
+    public double? QuickButtonsLeft { get; init; }
+    public double? QuickButtonsTop { get; init; }
+
+    /// <summary>
+    /// 자동화를 시작할 때 지정한 출력 장치로 바꿀지 여부입니다. 끄면 자동화에 장치가
+    /// 지정돼 있어도 오디오는 그대로 둡니다. 바탕화면의 오디오 버튼으로 바로 켜고 끕니다.
+    /// </summary>
+    public bool AutoSwitchAudio { get; init; } = true;
+
+    /// <summary>
+    /// 오디오 버튼 창의 스피커, 헤드셋 버튼이 바로 전환할 출력 장치입니다. 헤드셋을 비워
+    /// 두면 자동화에 지정된 출력 장치를 씁니다.
+    /// </summary>
+    public string QuickSpeakerEndpointId { get; init; } = string.Empty;
+    public string QuickHeadsetEndpointId { get; init; } = string.Empty;
+
+    /// <summary>
+    /// 오디오 버튼 창이 자동화 버튼 창의 어느 쪽에 붙어 있는지입니다. Left, Right, Top,
+    /// Bottom 중 하나이고, 비어 있으면 떨어져 있는 것이라 아래 좌표를 씁니다.
+    /// </summary>
+    public string AudioButtonsDock { get; init; } = "Bottom";
+
+    /// <summary>붙은 변을 따라 얼마나 밀려 있는지입니다.</summary>
+    public double AudioButtonsDockOffset { get; init; }
+    public double? AudioButtonsLeft { get; init; }
+    public double? AudioButtonsTop { get; init; }
 }
 
 public sealed record AutomationSession
