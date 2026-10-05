@@ -1785,7 +1785,17 @@ public partial class MainWindow : Window
     /// 붙어 있으면 자동화 버튼 창의 그 변에 맞춰 두고, 떨어져 있으면 마지막 자리에 둡니다.
     /// 저장된 자리가 화면 밖이면 아래쪽에 다시 붙입니다.
     /// </summary>
+    private bool _placingAudioWindow;
+
     private void PlaceAudioWindow()
+    {
+        if (_placingAudioWindow) return;
+        _placingAudioWindow = true;
+        try { PlaceAudioWindowCore(); }
+        finally { _placingAudioWindow = false; }
+    }
+
+    private void PlaceAudioWindowCore()
     {
         if (_quickWindow is null || _audioWindow is null)
         {
@@ -1817,6 +1827,32 @@ public partial class MainWindow : Window
             DockSide.Top => (_quickWindow.Left + offset, _quickWindow.Top - _audioWindow.ActualHeight - WindowMagnet.GapDip),
             _ => (_quickWindow.Left + offset, _quickWindow.Top + _quickWindow.ActualHeight + WindowMagnet.GapDip),
         };
+        // 두 창이 붙은 상태의 전체 경계를 작업 영역 안으로 옮긴다.
+        // 기본 위치는 오른쪽 아래이므로 아래에 붙인 오디오 창이 잘리기 쉽다.
+        var screen = System.Windows.Forms.Screen.FromHandle(
+            new WindowInteropHelper(_quickWindow).Handle);
+        var transform = PresentationSource.FromVisual(_quickWindow)?.CompositionTarget?.TransformFromDevice
+            ?? System.Windows.Media.Matrix.Identity;
+        var origin = transform.Transform(new System.Windows.Point(screen.WorkingArea.Left, screen.WorkingArea.Top));
+        var corner = transform.Transform(new System.Windows.Point(screen.WorkingArea.Right, screen.WorkingArea.Bottom));
+        var area = new System.Windows.Rect(origin, corner);
+        var minLeft = Math.Min(_quickWindow.Left, left);
+        var minTop = Math.Min(_quickWindow.Top, top);
+        var maxRight = Math.Max(_quickWindow.Left + _quickWindow.ActualWidth,
+            left + _audioWindow.ActualWidth);
+        var maxBottom = Math.Max(_quickWindow.Top + _quickWindow.ActualHeight,
+            top + _audioWindow.ActualHeight);
+        var shiftX = Math.Max(area.Left - minLeft, Math.Min(0, area.Right - maxRight));
+        var shiftY = Math.Max(area.Top - minTop, Math.Min(0, area.Bottom - maxBottom));
+        if (shiftX != 0 || shiftY != 0)
+        {
+            // LocationChanged가 이 메서드를 다시 호출하므로 먼저 오디오 창을 맞춘다.
+            _audioWindow.Left = left + shiftX;
+            _audioWindow.Top = top + shiftY;
+            _quickWindow.Left += shiftX;
+            _quickWindow.Top += shiftY;
+            return;
+        }
         _audioWindow.Left = left;
         _audioWindow.Top = top;
     }

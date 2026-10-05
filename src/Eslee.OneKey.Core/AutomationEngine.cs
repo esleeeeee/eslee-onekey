@@ -23,6 +23,7 @@ public sealed class AutomationEngine : IAsyncDisposable
     private VoiceChannelAutoJoin? _voiceChannelAutoJoin;
     private readonly IGameSessionService? _accountSessions;
     private DateTimeOffset? _launcherRestartedAt;
+    private bool _gameRestartPending;
 
     /// <summary>실행 명령을 보낸 직후 같은 명령을 다시 보내지 않는 시간입니다.</summary>
     private static readonly TimeSpan RelaunchGuard = TimeSpan.FromSeconds(20);
@@ -128,6 +129,11 @@ public sealed class AutomationEngine : IAsyncDisposable
         await _gate.WaitAsync(cancellationToken);
         try
         {
+            if (trigger == AutomationTrigger.ProcessStarted)
+            {
+                // 새 게임을 실제로 관찰한 뒤의 종료는 정상 종료로 처리한다.
+                _gameRestartPending = false;
+            }
             if (BusyStates.Contains(State))
             {
                 const string reason = "동일 자동화가 이미 실행 중이어서 중복 트리거를 무시했습니다.";
@@ -294,6 +300,7 @@ public sealed class AutomationEngine : IAsyncDisposable
 
             LastError = null;
             await StartLauncherAsync(cancellationToken);
+            _gameRestartPending = profile.CloseRunningGameToSwitch;
             var confirmation = await _accountSessions.ConfirmActiveAsync(profile, cancellationToken);
             if (!confirmation.CanContinue)
             {
@@ -392,6 +399,7 @@ public sealed class AutomationEngine : IAsyncDisposable
             LastError = null;
             KeptCurrentDevice = false;
             _audioSkippedThisRun = false;
+            _gameRestartPending = false;
             _logger.Info("automation-start", $"자동화를 시작합니다. trigger={trigger}");
 
             // 계정 전환은 오디오나 실행 파일을 건드리기 전에 끝낸다. 전환할 수 없으면
@@ -458,8 +466,10 @@ public sealed class AutomationEngine : IAsyncDisposable
             if (_launcherRestartedAt is { } restartedAt &&
                 _clock.UtcNow - restartedAt < LauncherRestartGrace &&
                 !string.IsNullOrWhiteSpace(_settings.WatchProcessName) &&
-                await _processes.IsRunningAsync(_settings.WatchProcessName, cancellationToken))
+                (_gameRestartPending ||
+                 await _processes.IsRunningAsync(_settings.WatchProcessName, cancellationToken)))
             {
+                _gameRestartPending = false;
                 _launcherRestartedAt = null;
                 _logger.Info(
                     "watched-process-restarted-by-switch",
@@ -887,6 +897,12 @@ public sealed class AutomationEngine : IAsyncDisposable
 
     private async Task EvaluateRestoreAsync(CancellationToken cancellationToken)
     {
+        if (!SwitchesAudio || _audioSkippedThisRun)
+        {
+            KeptCurrentDevice = true;
+            await CompleteAsync(cancellationToken, keepRestoreTarget: true);
+            return;
+        }
         if (!_settings.UseDiscordIntegration || !_settings.DeferRestoreWhileDiscordInVoice)
         {
             await RestoreIfSafeAsync(cancellationToken);
