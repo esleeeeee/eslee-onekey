@@ -9,12 +9,17 @@ namespace Eslee.OneKey.App;
 public partial class App : System.Windows.Application
 {
     private const string ShowWindowEventName = "Local\\eslee.OneKey.ShowWindow";
+    // 설치 관리자가 업데이트·제거 전에 이 이벤트를 켜서 실행 중인 앱을 정상 종료시킨다.
+    // 이름을 바꾸면 installer\eslee-onekey.iss도 함께 바꿔야 한다.
+    private const string ShutdownEventName = "Local\\eslee.OneKey.Shutdown";
     private const int AllowAnyProcess = -1;
 
     private Mutex? _singleInstance;
     private bool _ownsSingleInstanceMutex;
     private EventWaitHandle? _showWindowSignal;
     private RegisteredWaitHandle? _showWindowWait;
+    private EventWaitHandle? _shutdownSignal;
+    private RegisteredWaitHandle? _shutdownWait;
 
     protected override void OnStartup(StartupEventArgs e)
     {
@@ -55,6 +60,14 @@ public partial class App : System.Windows.Application
             state: null,
             Timeout.Infinite,
             executeOnlyOnce: false);
+
+        _shutdownSignal = new EventWaitHandle(false, EventResetMode.ManualReset, ShutdownEventName);
+        _shutdownWait = ThreadPool.RegisterWaitForSingleObject(
+            _shutdownSignal,
+            (_, _) => window.Dispatcher.InvokeAsync(window.ExitApplication),
+            state: null,
+            Timeout.Infinite,
+            executeOnlyOnce: true);
     }
 
     private static bool TryAskRunningInstanceToShow()
@@ -83,6 +96,8 @@ public partial class App : System.Windows.Application
     {
         _showWindowWait?.Unregister(null);
         _showWindowSignal?.Dispose();
+        _shutdownWait?.Unregister(null);
+        _shutdownSignal?.Dispose();
         if (_ownsSingleInstanceMutex)
         {
             _singleInstance?.ReleaseMutex();

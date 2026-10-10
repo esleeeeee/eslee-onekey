@@ -1,4 +1,4 @@
-name: Portable release
+name: Release
 on:
   push:
     tags: ['v*']
@@ -12,17 +12,22 @@ jobs:
       - uses: actions/setup-dotnet@v4
         with:
           global-json-file: global.json
-      - name: Test and package portable release
+      - name: Install Inno Setup
+        shell: pwsh
+        run: |
+          choco install innosetup --no-progress -y
+          if ($LASTEXITCODE -ne 0) { throw 'Inno Setup installation failed' }
+      - name: Test and package installer and portable release
         id: package
         shell: pwsh
         run: |
           if ($env:GITHUB_REF_NAME -notmatch '^v\d+\.\d+\.\d+$') { throw 'Expected vMAJOR.MINOR.PATCH tag' }
           $version = $env:GITHUB_REF_NAME.Substring(1)
-          ./scripts/Build-PortableRelease.ps1 -Version $version
+          ./scripts/Build-Release.ps1 -Version $version
           "version=$version" >> $env:GITHUB_OUTPUT
       - uses: actions/upload-artifact@v4
         with:
-          name: portable-release
+          name: release
           path: artifacts/release/${{ steps.package.outputs.version }}/
           if-no-files-found: error
   publish:
@@ -33,10 +38,10 @@ jobs:
     steps:
       - uses: actions/download-artifact@v4
         with:
-          name: portable-release
+          name: release
           path: release
       - name: Create new release without replacing published assets
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag --title "eslee OneKey $GITHUB_REF_NAME" --notes-file release/release-notes.md release/*-Portable.zip release/sha256.txt release/validation-manifest.json release/TestResults/*.trx
+          gh release create "$GITHUB_REF_NAME" --repo "$GITHUB_REPOSITORY" --verify-tag --title "eslee OneKey $GITHUB_REF_NAME" --notes-file release/release-notes.md release/*-Setup.exe release/*-Portable.zip release/sha256.txt release/validation-manifest.json release/TestResults/*.trx
