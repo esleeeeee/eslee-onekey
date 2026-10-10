@@ -6,9 +6,13 @@ Documentation: [한국어](README.md) · **English**
 
 ## Download the latest build
 
-Open the [latest GitHub Release](https://github.com/esleeeeee/eslee-onekey/releases/latest) and download the file whose name ends in `-Portable.zip`.
+Open the [latest GitHub Release](https://github.com/esleeeeee/eslee-onekey/releases/latest) and download and run the installer whose name ends in `-Setup.exe`. It adds `eslee OneKey` to the Start menu and lets you choose a desktop shortcut and starting at sign-in.
 
-`Source code (zip)` and `Source code (tar.gz)` are developer archives, not the app. Most users should extract `-Portable.zip` and run `Eslee.OneKey.App.exe`.
+If you would rather not install, extract `-Portable.zip` anywhere and run `Eslee.OneKey.App.exe`. `Source code (zip)` and `Source code (tar.gz)` are developer archives, not the app.
+
+To move from the portable build to the installed one, just run the installer. Settings live in `%LOCALAPPDATA%\eslee OneKey` and carry over, and the installer closes a running OneKey cleanly. Portable builds up to v0.1.6 do not understand that signal, so exit them from the tray menu first. You can delete the old portable folder afterwards.
+
+When a new version is out, the update section in app settings says so. Download and run the new installer to update in place.
 
 No separate .NET installation is required. The app runs on Windows 10 2004 or later, or Windows 11 (x64).
 
@@ -25,9 +29,9 @@ No separate .NET installation is required. The app runs on Windows 10 2004 or la
 
 The basic flow:
 
-> Extract → Run → New automation → Name and hotkey → Program and watched process → Audio device → Discord connection and channel → Save
+> Install → Run → New automation → Name and hotkey → Program and watched process → Audio device → Discord connection and channel → Save
 
-1. Extract the zip anywhere and run `Eslee.OneKey.App.exe`.
+1. Run the installer, then start `eslee OneKey` from the Start menu.
 2. On the **Automation** screen, click **+ New automation** on the left.
 3. Under **Basic**, set a name and a hotkey. Pick a combination no other program uses, such as `Ctrl + Alt + Shift + V`.
 4. Turn on **Program** and choose the executable to launch. In **Watched program**, enter the process whose exit means the automation is over.
@@ -160,7 +164,7 @@ See [Architecture](docs/ARCHITECTURE.md), [API contract](docs/API_CONTRACT.md), 
 
 - Changing the Windows default audio device has no public API, so the app uses the `PolicyConfig` COM interface. Each Windows update warrants a check on real hardware.
 - Discord only reports the voice channels you can see, not whether you may connect, so a channel you lack permission for is refused at join time.
-- Automatic updates, code signing, and an installer are not provided yet.
+- Automatic updates and code signing are not provided yet. Because the installer is unsigned, Windows SmartScreen may warn on first install.
 
 ## License
 
