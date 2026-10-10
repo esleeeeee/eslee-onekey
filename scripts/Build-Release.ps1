@@ -5,11 +5,24 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
+
+function Find-Iscc {
+    $candidates = @(
+        (Get-Command 'ISCC.exe' -ErrorAction SilentlyContinue | Select-Object -ExpandProperty Source),
+        (Join-Path $env:LOCALAPPDATA 'Programs\Inno Setup 6\ISCC.exe'),
+        'C:\Program Files (x86)\Inno Setup 6\ISCC.exe',
+        'C:\Program Files\Inno Setup 6\ISCC.exe'
+    ) | Where-Object { $_ -and (Test-Path -LiteralPath $_) }
+    if (!$candidates) { throw 'ISCC.exe (Inno Setup 6) was not found. Install Inno Setup 6 first.' }
+    return $candidates | Select-Object -First 1
+}
+
 $repoRoot = [IO.Path]::GetFullPath((Join-Path $PSScriptRoot '..'))
 $gitRoot = $repoRoot.Replace('\', '/')
 $project = Join-Path $repoRoot 'src/Eslee.OneKey.App/Eslee.OneKey.App.csproj'
 [xml]$projectXml = Get-Content -LiteralPath $project -Raw
 if ($projectXml.Project.PropertyGroup.Version -ne $Version) { throw 'Tag/package version differs from project version' }
+$iscc = Find-Iscc
 $notes = Join-Path $repoRoot "docs/releases/v$Version.md"
 if (!(Test-Path -LiteralPath $notes)) { throw 'Release notes are required' }
 $sourceSha = & git -c "safe.directory=$gitRoot" -C $repoRoot rev-parse HEAD
@@ -41,7 +54,16 @@ try {
         if (!($zip.Entries.FullName -contains 'Eslee.OneKey.App.exe')) { throw 'Executable absent from portable archive' }
     } finally { $zip.Dispose() }
     $archiveHash = (Get-FileHash -LiteralPath $archive -Algorithm SHA256).Hash
-    "$archiveHash  $archiveName" | Set-Content -LiteralPath (Join-Path $output 'sha256.txt') -Encoding ascii
+
+    # 설치형은 포터블 zip과 같은 self-contained 게시본을 그대로 담는다.
+    & $iscc '/Q' "/DAppVersion=$Version" "/DSourceDir=$stage" "/DOutputDir=$output" (Join-Path $repoRoot 'installer/eslee-onekey.iss')
+    if ($LASTEXITCODE -ne 0) { throw 'Inno Setup compile failed' }
+    $installerName = "eslee-OneKey-v$Version-win-x64-Setup.exe"
+    $installer = Join-Path $output $installerName
+    if (!(Test-Path -LiteralPath $installer -PathType Leaf)) { throw "Installer was not created: $installer" }
+    $installerHash = (Get-FileHash -LiteralPath $installer -Algorithm SHA256).Hash
+
+    @("$installerHash  $installerName", "$archiveHash  $archiveName") | Set-Content -LiteralPath (Join-Path $output 'sha256.txt') -Encoding ascii
     [xml]$testResults = Get-Content -LiteralPath (Join-Path $results 'tests.trx') -Raw
     $counters = $testResults.SelectSingleNode("//*[local-name()='Counters']")
     $binaryHashes = @(Get-ChildItem -LiteralPath $stage -Recurse -File |
@@ -58,11 +80,15 @@ try {
         self_contained = $true
         archive = $archiveName
         archive_sha256 = $archiveHash
+        installer = $installerName
+        installer_sha256 = $installerHash
         tests = [ordered]@{ total = [int]$counters.total; passed = [int]$counters.passed; failed = [int]$counters.failed; skipped = $testResults.SelectNodes("//*[local-name()='UnitTestResult'][@outcome='NotExecuted']").Count }
         smoke_policy = 'Real audio/RPC opt-ins disabled in packaging; no user session/process operations'
         binary_hashes = $binaryHashes
     } | ConvertTo-Json -Depth 6 | Set-Content -LiteralPath (Join-Path $output 'validation-manifest.json') -Encoding utf8
     Copy-Item -LiteralPath $notes -Destination (Join-Path $output 'release-notes.md') -Force
+    Write-Output "Installer ready: $installer"
+    Write-Output "SHA256: $installerHash"
     Write-Output "Portable package ready: $archive"
     Write-Output "SHA256: $archiveHash"
 } finally {
