@@ -6,9 +6,13 @@ eslee OneKey는 단축키 하나로 게임 실행, 오디오 장치 전환, Disc
 
 ## 최신 파일 다운로드
 
-[GitHub Releases의 최신 릴리스](https://github.com/esleeeeee/eslee-onekey/releases/latest)에서 파일 이름이 `-Portable.zip`으로 끝나는 파일을 받으세요.
+[GitHub Releases의 최신 릴리스](https://github.com/esleeeeee/eslee-onekey/releases/latest)에서 파일 이름이 `-Setup.exe`로 끝나는 설치 파일을 받아 실행하세요. 시작 메뉴에 `eslee OneKey`가 등록되고, 설치 중에 바탕화면 바로가기와 로그인 시 자동 실행을 고를 수 있습니다.
 
-`Source code (zip)`과 `Source code (tar.gz)`는 개발용 소스 파일이며 실행 파일이 아닙니다. 일반 사용자는 `-Portable.zip`을 풀고 `Eslee.OneKey.App.exe`를 실행하면 됩니다.
+설치하지 않고 쓰고 싶다면 `-Portable.zip`을 원하는 폴더에 풀고 `Eslee.OneKey.App.exe`를 실행하면 됩니다. `Source code (zip)`과 `Source code (tar.gz)`는 개발용 소스 파일이며 실행 파일이 아닙니다.
+
+포터블에서 설치형으로 옮길 때는 설치 파일만 실행하면 됩니다. 설정은 `%LOCALAPPDATA%\eslee OneKey`에 있어 그대로 이어지고, 실행 중인 OneKey는 설치 관리자가 정상 종료합니다. v0.1.6 이하 포터블은 종료 신호를 몰라서 트레이 메뉴에서 먼저 종료해야 합니다. 설치 후 남은 포터블 폴더는 지워도 됩니다.
+
+새 버전이 나오면 앱 설정의 업데이트 항목에 표시됩니다. 새 설치 파일을 받아 실행하면 덮어써서 업데이트됩니다.
 
 .NET을 따로 설치하지 않아도 됩니다. 이 앱은 Windows 10 2004 이상 또는 Windows 11 x64 전용입니다.
 
@@ -25,9 +29,9 @@ eslee OneKey는 단축키 하나로 게임 실행, 오디오 장치 전환, Disc
 
 기본 순서는 다음과 같습니다.
 
-> 압축 풀기 → 실행 → 새 자동화 → 이름과 단축키 → 실행 파일과 감시 프로그램 → 오디오 장치 → Discord 연결과 채널 → 저장
+> 설치 → 실행 → 새 자동화 → 이름과 단축키 → 실행 파일과 감시 프로그램 → 오디오 장치 → Discord 연결과 채널 → 저장
 
-1. 받은 zip을 원하는 폴더에 풀고 `Eslee.OneKey.App.exe`를 실행합니다.
+1. 설치 파일을 실행해 설치하고 시작 메뉴의 `eslee OneKey`를 실행합니다.
 2. `자동화` 화면에서 왼쪽의 `+ 새 자동화`를 누릅니다.
 3. `기본 설정`에서 이름을 정하고 단축키를 지정합니다. 예를 들어 `Ctrl + Alt + Shift + V`처럼 다른 프로그램과 겹치지 않는 조합이 좋습니다.
 4. `프로그램`을 켜고 실행할 파일을 고릅니다. `종료 감시 프로그램`에는 이 프로그램이 종료되면 자동화가 끝난 것으로 볼 프로세스 이름을 넣습니다.
@@ -171,7 +175,7 @@ docs                                     요구사항, 아키텍처, 결정, API
 
 - Windows 기본 오디오 장치 변경은 공개 API가 없어 `PolicyConfig` COM 인터페이스를 사용합니다. Windows 업데이트마다 실제 장비에서 확인이 필요합니다.
 - Discord 음성채널 목록은 볼 수 있는 채널까지만 알려 줍니다. 입장 권한은 알 수 없으므로 권한이 없는 채널은 입장 시점에 거부됩니다.
-- 자동 업데이트, 코드 서명, 설치 관리자는 아직 제공하지 않습니다.
+- 자동 업데이트와 코드 서명은 아직 제공하지 않습니다. 서명이 없어 처음 설치할 때 Windows SmartScreen 경고가 나올 수 있습니다.
 
 ## 라이선스
 

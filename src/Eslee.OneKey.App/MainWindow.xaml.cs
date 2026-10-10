@@ -165,7 +165,7 @@ public partial class MainWindow : Window
                     $"최신 버전입니다. (현재 {UpdateCheckService.FormatVersion(CurrentVersion)})",
                 UpdateCheckStatus.UpdateAvailable =>
                     $"새 버전 {result.LatestVersion}을(를) 사용할 수 있습니다. " +
-                    "Release 페이지에서 내려받으세요.",
+                    "Release 페이지에서 설치 파일(-Setup.exe)을 받아 실행하세요.",
                 UpdateCheckStatus.NoReleaseFound =>
                     "확인 가능한 정식 릴리스가 없습니다. 저장소가 비공개이거나 아직 릴리스가 게시되지 않았습니다.",
                 _ => "업데이트 확인에 실패했습니다. 잠시 후 다시 시도하세요.",
